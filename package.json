@@ -1,11 +1,14 @@
 {
   "name": "nuclearwatch",
-  "version": "1.0.0", 
+  "version": "1.0.0",
   "description": "Nuclear incident drone planner for Risø",
-  "main": "drone-mission-planner.html",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "test": "echo \"No tests specified\" && exit 0"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
   },
   "engines": {
     "node": "24.x"
