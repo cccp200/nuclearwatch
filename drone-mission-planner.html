@@ -1,0 +1,1205 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NuclearWatch — Risø Beredskab v8</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0d14;--surface:#111827;--surface2:#1a2233;--border:#1e2d45;
+  --accent:#00e5ff;--accent2:#ff6b35;--warning:#ffcc00;--danger:#ff3366;--ok:#39ff8a;
+  --text:#c8d8e8;--text-dim:#5a7a9a;
+  --font-mono:'Share Tech Mono',monospace;--font-ui:'Exo 2',sans-serif;
+}
+.light{--bg:#e8edf5;--surface:#f0f4fa;--surface2:#dde5f0;--border:#b0c4de;--accent:#0066cc;--accent2:#cc4400;--warning:#cc8800;--danger:#cc0033;--ok:#008844;--text:#1a2a3a;--text-dim:#5a7090}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--font-ui);height:100vh;overflow:hidden;display:flex;flex-direction:column}
+header{background:var(--surface);border-bottom:1px solid var(--border);padding:0 14px;height:48px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;position:relative;z-index:1000}
+.logo{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:14px;color:var(--accent);letter-spacing:2px}
+.hazard{width:22px;height:22px;border:2px solid var(--accent2);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--accent2);animation:pulse-ring 2s infinite}
+@keyframes pulse-ring{0%,100%{box-shadow:0 0 0 0 rgba(255,107,53,.4)}50%{box-shadow:0 0 0 5px rgba(255,107,53,0)}}
+.header-center{position:absolute;left:50%;transform:translateX(-50%);font-family:var(--font-mono);font-size:10px;color:var(--text-dim);letter-spacing:1px;text-align:center;pointer-events:none}
+.clock{font-size:14px;color:var(--accent);display:block}
+.header-controls{display:flex;align-items:center;gap:6px}
+.btn{background:transparent;border:1px solid var(--border);color:var(--text);padding:4px 10px;font-family:var(--font-mono);font-size:11px;cursor:pointer;letter-spacing:1px;transition:all .2s;border-radius:2px;white-space:nowrap}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.danger{border-color:var(--danger)!important;color:var(--danger)!important}
+.btn.primary{border-color:var(--accent);color:var(--accent);background:rgba(0,229,255,.07)}
+.btn.active-toggle{border-color:var(--ok)!important;color:var(--ok)!important;background:rgba(57,255,138,.07)}
+.alert-badge{background:var(--danger);color:#fff;font-family:var(--font-mono);font-size:10px;padding:2px 7px;border-radius:2px;letter-spacing:1px;animation:blink 1s infinite;white-space:nowrap}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+.alert-badge.hidden{display:none}
+
+.main{display:flex;flex:1;overflow:hidden}
+.panel-left{width:272px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto}
+.panel-right{width:256px;flex-shrink:0;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto}
+.panel-section{border-bottom:1px solid var(--border);padding:8px 12px;flex-shrink:0}
+.section-title{font-family:var(--font-mono);font-size:9px;color:var(--text-dim);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
+
+/* VEHICLE GROUP — expandable */
+.veh-group{margin-bottom:4px;border:1px solid var(--border);border-radius:3px;overflow:hidden}
+.veh-header{display:flex;align-items:center;gap:6px;padding:5px 8px;background:var(--surface2);cursor:pointer;transition:background .15s}
+.veh-header:hover{background:#222e42}
+.veh-icon{font-size:15px;flex-shrink:0}
+.veh-name{font-family:var(--font-mono);font-size:10px;flex:1}
+.veh-stats{font-family:var(--font-mono);font-size:9px;color:var(--text-dim);display:flex;gap:8px;align-items:center}
+.veh-comms{font-size:9px;padding:1px 4px;border-radius:1px;font-family:var(--font-mono)}
+.comms-ok{background:rgba(57,255,138,.12);color:var(--ok)}
+.comms-weak{background:rgba(255,204,0,.12);color:var(--warning)}
+.comms-lost{background:rgba(255,51,102,.15);color:var(--danger)}
+.veh-expand{font-size:8px;color:var(--text-dim);padding:0 2px}
+.veh-drones{display:none;padding:4px 6px;background:rgba(0,0,0,.15)}
+.veh-drones.open{display:block}
+
+/* Compact drone row — 5 per vehicle */
+.drone-mini{
+  display:grid;grid-template-columns:34px 1fr 42px 46px;
+  gap:3px;align-items:center;
+  padding:3px 5px;margin-bottom:2px;
+  background:var(--surface2);border:1px solid var(--border);border-left:2px solid #333;
+  cursor:pointer;transition:border-color .15s;border-radius:2px;height:28px;
+}
+.drone-mini:hover{border-color:var(--accent)}
+.drone-mini.idle{border-left-color:var(--ok)}
+.drone-mini.mission{border-left-color:var(--accent2)}
+.drone-mini.returning{border-left-color:var(--accent)}
+.drone-mini.charging{border-left-color:var(--warning);opacity:.6}
+.drone-mini.comms-out{border-left-color:var(--danger);opacity:.7}
+.dm-id{font-family:var(--font-mono);font-size:9px;font-weight:bold;overflow:hidden}
+.dm-batt{display:flex;flex-direction:column;gap:2px}
+.dm-batt-bar{height:2px;background:var(--border);border-radius:1px;overflow:hidden}
+.dm-batt-fill{height:100%;border-radius:1px}
+.dm-batt-txt{font-family:var(--font-mono);font-size:8px;color:var(--text-dim)}
+.dm-status{font-family:var(--font-mono);font-size:7px;padding:1px 2px;border-radius:1px;text-align:center;white-space:nowrap}
+.s-idle{background:rgba(57,255,138,.12);color:var(--ok)}
+.s-mission{background:rgba(255,107,53,.12);color:var(--accent2)}
+.s-returning{background:rgba(0,229,255,.12);color:var(--accent)}
+.s-charging{background:rgba(255,204,0,.12);color:var(--warning)}
+.s-comms-out{background:rgba(255,51,102,.15);color:var(--danger)}
+.dm-meas{font-family:var(--font-mono);font-size:9px;text-align:right;white-space:nowrap;overflow:hidden}
+
+/* Comms range ring toggle */
+.comms-info-box{background:var(--surface2);border:1px solid var(--border);border-radius:2px;padding:6px 8px;margin-top:6px;font-family:var(--font-mono);font-size:9px;line-height:1.7;color:var(--text-dim)}
+.comms-info-box span{color:var(--accent)}
+
+.reading-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.reading-item{background:var(--surface2);border:1px solid var(--border);padding:5px;text-align:center;border-radius:2px;height:58px;display:flex;flex-direction:column;justify-content:center;align-items:center}
+.reading-label{font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:1px}
+.reading-value{font-family:var(--font-mono);font-size:14px;color:var(--accent);width:80px;text-align:center;display:block;overflow:hidden}
+.reading-unit{font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-top:1px}
+.reading-item.danger-level .reading-value{color:var(--danger)}
+.reading-item.warning-level .reading-value{color:var(--warning)}
+
+.evac-zone{background:var(--surface2);border:1px solid var(--border);padding:4px 7px;margin-bottom:3px;border-radius:2px;display:flex;align-items:center;gap:7px;height:42px}
+.evac-icon{font-size:12px;flex-shrink:0}
+.evac-info{flex:1;min-width:0}
+.evac-name{font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.evac-pop{font-family:var(--font-mono);font-size:8px;color:var(--text-dim)}
+.evac-status{font-family:var(--font-mono);font-size:8px;padding:2px 3px;border-radius:1px;white-space:nowrap;flex-shrink:0;width:52px;text-align:center}
+.evac-clear{background:rgba(57,255,138,.12);color:var(--ok)}
+.evac-watch{background:rgba(255,204,0,.12);color:var(--warning)}
+.evac-evacuate{background:rgba(255,51,102,.15);color:var(--danger);animation:blink 1s infinite}
+
+.wind-display{display:flex;align-items:center;gap:10px}
+.wind-compass{width:52px;height:52px;border:1px solid var(--border);border-radius:50%;position:relative;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.cml{font-family:var(--font-mono);font-size:7px;color:var(--text-dim);position:absolute;line-height:1}
+.cml.n{top:2px;left:50%;transform:translateX(-50%)}
+.cml.s{bottom:2px;left:50%;transform:translateX(-50%)}
+.cml.e{right:2px;top:50%;transform:translateY(-50%)}
+.cml.w{left:2px;top:50%;transform:translateY(-50%)}
+.wind-stats{font-family:var(--font-mono);font-size:10px;line-height:1.8}
+.wind-stats .val{color:var(--accent)}
+
+.legend{display:flex;flex-direction:column;gap:3px}
+.legend-item{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:9px;color:var(--text-dim)}
+.lsw{width:18px;height:6px;border-radius:1px;flex-shrink:0}
+.fade-legend{display:flex;align-items:center;gap:6px;margin-top:5px;font-family:var(--font-mono);font-size:9px;color:var(--text-dim)}
+.fade-bar{height:5px;flex:1;border-radius:2px;background:linear-gradient(to right,rgba(0,229,255,.7),rgba(0,229,255,.05));border:1px solid var(--border)}
+.sector-info{font-family:var(--font-mono);font-size:9px;color:var(--text-dim);line-height:1.7;margin-top:3px}
+.sector-info span{color:var(--accent)}
+
+.coverage-label{font-family:var(--font-mono);font-size:9px;color:var(--text-dim);display:flex;justify-content:space-between;margin-top:6px}
+.coverage-bar-wrap{background:var(--surface2);border:1px solid var(--border);border-radius:2px;height:7px;overflow:hidden;margin-top:2px}
+.coverage-bar-fill{height:100%;border-radius:2px;background:linear-gradient(to right,var(--danger),var(--warning),var(--ok));transition:width .5s}
+
+.profile-wrap{height:72px;background:var(--surface2);border:1px solid var(--border);border-radius:2px;overflow:hidden;position:relative}
+.profile-wrap canvas{position:absolute;top:0;left:0;width:100%;height:100%}
+
+#map{flex:1;z-index:1}
+.leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(1.05)}
+.light .leaflet-tile-pane{filter:none}
+.leaflet-control-attribution{font-size:9px!important}
+.riso-tooltip{background:rgba(255,51,102,.9)!important;border:none!important;color:#fff!important;font-family:'Share Tech Mono',monospace!important;font-size:10px!important;font-weight:bold}
+.riso-tooltip::before{display:none!important}
+.leaflet-tooltip{background:rgba(17,24,39,.92)!important;border:1px solid #1e2d45!important;color:#c8d8e8!important;font-family:'Share Tech Mono',monospace!important;font-size:10px!important}
+
+.sim-controls{padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
+.sim-row{display:flex;gap:5px;margin-bottom:5px}
+.sim-row .btn{flex:1;padding:6px;font-size:10px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.slider-label{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:9px;color:var(--text-dim);margin-bottom:3px}
+.time-bar-wrap{background:var(--surface2);border:1px solid var(--border);height:4px;border-radius:3px;margin-bottom:6px;overflow:hidden}
+.time-bar-fill{height:100%;background:var(--accent);width:0%;border-radius:3px}
+
+.forecast-strip{display:flex;gap:4px;margin-bottom:4px}
+.fc-btn{flex:1;padding:4px 2px;font-family:var(--font-mono);font-size:9px;text-align:center;border:1px solid var(--border);border-radius:2px;cursor:pointer;transition:all .15s;background:transparent;color:var(--text-dim)}
+.fc-btn:hover{border-color:var(--warning);color:var(--warning)}
+.fc-btn.on{border-color:var(--warning);color:var(--warning);background:rgba(255,204,0,.08)}
+.forecast-info{font-family:var(--font-mono);font-size:9px;color:var(--text-dim);line-height:1.6}
+
+.log-scroll{overflow-y:auto;max-height:130px;padding:6px 12px}
+.log-entry{font-family:var(--font-mono);font-size:9px;line-height:1.6;color:var(--text-dim)}
+.log-entry .lt{color:var(--accent)}
+.log-warn .lm{color:var(--warning)}
+.log-alert .lm{color:var(--danger)}
+.log-ok .lm{color:var(--ok)}
+
+.notification{position:fixed;bottom:16px;right:16px;background:var(--surface);border:1px solid var(--danger);padding:10px 15px;font-family:var(--font-mono);font-size:11px;z-index:9999;max-width:290px;border-radius:2px;transform:translateX(340px);transition:transform .3s ease;line-height:1.5}
+.notification.show{transform:translateX(0)}
+.notif-title{color:var(--danger);margin-bottom:3px;font-size:12px}
+::-webkit-scrollbar{width:3px}
+::-webkit-scrollbar-track{background:var(--surface)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><div class="hazard">☢</div>NUCLEARWATCH</div>
+  <div class="header-center">
+    <span class="clock" id="clock">--:--:--</span>
+    RISØ ATOMENERGIANLÆG — BEREDSKAB NIVEAU 4
+  </div>
+  <div class="header-controls">
+    <span class="alert-badge hidden" id="alert-badge">⚠ EVAKUERING</span>
+    <button class="btn" id="comms-btn" onclick="toggleCommsRings()">📡 KOMMS</button>
+    <button class="btn" id="forecast-btn" onclick="toggleAllForecasts()">🔭 PROGNOSE</button>
+    <button class="btn" id="theme-btn" onclick="toggleTheme()">☀ LIGHT</button>
+    <button class="btn primary" id="sim-btn" onclick="toggleSim()">▶ START</button>
+  </div>
+</header>
+
+<div class="main">
+<!-- LEFT PANEL -->
+<div class="panel-left">
+  <div class="panel-section">
+    <div class="section-title">
+      <span>▸ Droner — 50 enheder / 5 køretøjer</span>
+      <span id="drone-summary" style="font-size:9px;color:var(--accent)"></span>
+    </div>
+    <div id="vehicle-drone-list"></div>
+    <div class="comms-info-box" id="comms-box">
+      <div>Radiolink: <span id="comms-range-val">15 km</span> rækkevidde</div>
+      <div>I kontakt: <span id="comms-ok-count">—</span> / 50 droner</div>
+      <div style="margin-top:3px;color:var(--text-dim)">Krisescenarie: mobilnet <span style="color:var(--danger)">OFFLINE</span> — kun dedikeret radio</div>
+    </div>
+  </div>
+  <div class="panel-section">
+    <div class="section-title">▸ Stråling — aktuelle målinger</div>
+    <div class="reading-grid">
+      <div class="reading-item" id="ri-max"><div class="reading-label">MAX μSv/h</div><span class="reading-value" id="rv-max">—</span><div class="reading-unit">frisk</div></div>
+      <div class="reading-item" id="ri-avg"><div class="reading-label">GNSN μSv/h</div><span class="reading-value" id="rv-avg">—</span><div class="reading-unit">frisk</div></div>
+      <div class="reading-item"><div class="reading-label">SKY RADIUS</div><span class="reading-value" id="rv-rad">?</span><div class="reading-unit">km est.</div></div>
+      <div class="reading-item"><div class="reading-label">KORTLAGTE</div><span class="reading-value" id="rv-pts">0</span><div class="reading-unit">celler</div></div>
+    </div>
+    <div class="coverage-label"><span>DÆKNING AF SKYOMRÅDE</span><span id="coverage-pct">0%</span></div>
+    <div class="coverage-bar-wrap"><div class="coverage-bar-fill" id="coverage-bar" style="width:0%"></div></div>
+  </div>
+  <div class="panel-section">
+    <div class="section-title">▸ Vejrdata</div>
+    <div class="wind-display">
+      <div class="wind-compass">
+        <span class="cml n">N</span><span class="cml s">S</span>
+        <span class="cml e">Ø</span><span class="cml w">V</span>
+        <svg viewBox="0 0 56 56" style="position:absolute;width:100%;height:100%;pointer-events:none">
+          <g id="wind-g">
+            <line x1="28" y1="40" x2="28" y2="13" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round"/>
+            <polygon points="28,7 22,19 34,19" fill="var(--accent)"/>
+            <line x1="28" y1="40" x2="21" y2="47" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="28" y1="36" x2="21" y2="43" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/>
+          </g>
+        </svg>
+      </div>
+      <div class="wind-stats">
+        <div>Fra: <span class="val" id="ws-from">—</span></div>
+        <div>Mod: <span class="val" id="ws-to">—</span></div>
+        <div>Fart: <span class="val" id="ws-spd">—</span> m/s</div>
+        <div>Temp: <span class="val" id="ws-temp">—</span>°C</div>
+      </div>
+    </div>
+  </div>
+  <div class="panel-section">
+    <div class="section-title">▸ Beredskabssektorer</div>
+    <div class="legend">
+      <div class="legend-item"><div class="lsw" style="background:rgba(255,51,102,.7)"></div>&gt;1000 μSv/h — ZONE A</div>
+      <div class="legend-item"><div class="lsw" style="background:rgba(255,120,0,.6)"></div>100–1000 — ZONE B</div>
+      <div class="legend-item"><div class="lsw" style="background:rgba(255,220,0,.45)"></div>10–100 — ZONE C</div>
+      <div class="legend-item"><div class="lsw" style="background:rgba(0,255,136,.22)"></div>&lt;10 — ZONE D</div>
+    </div>
+    <div class="fade-legend"><span>Frisk</span><div class="fade-bar"></div><span>Gammel</span></div>
+    <div class="sector-info">Indre: <span>0–3km</span> · Mel: <span>3–15km</span> · Ydre: <span>15–30km</span></div>
+  </div>
+  <div class="panel-section">
+    <div class="section-title">▸ 3D Stralingsprofil</div>
+    <div class="profile-wrap"><canvas id="profile-canvas"></canvas></div>
+    <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-top:3px;display:flex;justify-content:space-between"><span>Målt ←</span><span id="sweep-info">—</span><span>→ Model</span></div>
+  </div>
+</div>
+
+<div id="map"></div>
+
+<!-- RIGHT PANEL -->
+<div class="panel-right">
+  <div class="sim-controls">
+    <div class="section-title">▸ Simulation</div>
+    <div class="slider-label"><span>Hastighed</span><span id="speed-val">1×</span></div>
+    <input type="range" min="1" max="20" value="1" oninput="updateSpeed(this.value)" style="margin-bottom:5px">
+    <div class="slider-label"><span>Forløbet tid</span><span id="time-val">T+0h00m</span></div>
+    <div class="time-bar-wrap"><div class="time-bar-fill" id="time-bar"></div></div>
+    <div class="sim-row">
+      <button class="btn" onclick="resetSim()">↺ RESET</button>
+      <button class="btn primary" onclick="deployAll()">⬆ DEPLOY ALL</button>
+    </div>
+  </div>
+
+  <div class="panel-section">
+    <div class="section-title">▸ Skyprognose</div>
+    <div class="forecast-strip">
+      <div class="fc-btn" data-h="1" onclick="toggleForecast(1)">+1h</div>
+      <div class="fc-btn" data-h="2" onclick="toggleForecast(2)">+2h</div>
+      <div class="fc-btn" data-h="4" onclick="toggleForecast(4)">+4h</div>
+      <div class="fc-btn" data-h="8" onclick="toggleForecast(8)">+8h</div>
+    </div>
+    <div class="forecast-info" id="forecast-info">Vælg tidshorisont ovenfor</div>
+  </div>
+
+  <div class="panel-section">
+    <div class="section-title">▸ Evakueringsstatus</div>
+    <div id="evac-zones"></div>
+  </div>
+
+  <div class="panel-section" style="flex-shrink:0">
+    <div class="section-title">▸ Missions Log</div>
+    <div class="log-scroll" id="log"></div>
+  </div>
+</div>
+</div>
+
+<div class="notification" id="notif">
+  <div class="notif-title" id="notif-title"></div>
+  <div id="notif-body"></div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════
+// CONSTANTS & CONFIG
+// ══════════════════════════════════════════════════════════
+const RISO = [55.6932, 12.0849];
+
+const TRUE_CLOUD = {
+  lat:55.6932, lng:12.0849,
+  radiusKm:2.2, intensity:1100,
+  windDeg:225, windSpd:4.2,
+  temp:9.0,
+  sigmaY:2.2, sigmaZ:0.4, sourceHeight:50,
+};
+
+// Communication: dedicated radio link range from vehicle base
+const COMMS_RANGE_KM = 15;   // km from vehicle
+const COMMS_WEAK_KM  = 12;   // km — starts degrading
+
+// Road-only waypoints — carefully verified to stay on land
+// All routes loop on real Danish road corridors around Risø
+// Vehicles orbit the cloud. Angle offsets relative to downwind direction:
+// B-01 = front (downwind), B-02 = front-left, B-03 = front-right,
+// B-04 = rear-left, B-05 = upwind (source monitor)
+const BASE_ANGLE_OFFSETS = {'B-01':0,'B-02':-60,'B-03':60,'B-04':150,'B-05':180};
+
+const BASE_DEFS = [
+  { id:'B-01', name:'Alpha — Front', icon:'🚐', color:'#00e5ff',
+    drones:['D-01','D-02','D-03','D-04','D-05','D-06','D-07','D-08','D-09','D-10'] },
+  { id:'B-02', name:'Bravo — Venstre', icon:'🚐', color:'#ff6b35',
+    drones:['D-11','D-12','D-13','D-14','D-15','D-16','D-17','D-18','D-19','D-20'] },
+  { id:'B-03', name:'Charlie — Højre', icon:'🚐', color:'#39ff8a',
+    drones:['D-21','D-22','D-23','D-24','D-25','D-26','D-27','D-28','D-29','D-30'] },
+  { id:'B-04', name:'Delta — Bagside', icon:'🚐', color:'#ffcc00',
+    drones:['D-31','D-32','D-33','D-34','D-35','D-36','D-37','D-38','D-39','D-40'] },
+  { id:'B-05', name:'Echo — Kilde/Opvind', icon:'🚐', color:'#ff66cc',
+    drones:['D-41','D-42','D-43','D-44','D-45','D-46','D-47','D-48','D-49','D-50'] },
+];
+
+// 25 drones — 5 per vehicle
+const ALT_SWEEPS = [
+  {label:'L1',altM:100,color:'#00e5ff'},
+  {label:'L2',altM:250,color:'#39ff8a'},
+  {label:'L3',altM:450,color:'#ffcc00'},
+  {label:'L4',altM:650,color:'#ff6b35'},
+  {label:'L5',altM:150,color:'#ff66cc'},
+];
+
+function makeDroneDefs() {
+  const defs=[];
+  for(let i=1;i<=50;i++){
+    const id=`D-${String(i).padStart(2,'0')}`;
+    const base=BASE_DEFS[Math.floor((i-1)/10)];
+    const sweep=ALT_SWEEPS[(i-1)%ALT_SWEEPS.length];
+    defs.push({id, color:base.color, battery:75+Math.random()*25, sweep});
+  }
+  return defs;
+}
+const DRONE_DEFS = makeDroneDefs();
+
+const ZONES=[
+  {name:'Roskilde',      pos:[55.6420,12.0803],pop:50000},
+  {name:'Jyllinge',      pos:[55.7321,12.1030],pop:9800},
+  {name:'Lejre',         pos:[55.6178,11.9756],pop:7200},
+  {name:'Frederikssund', pos:[55.8396,12.0675],pop:16000},
+  {name:'Gundsømagle',   pos:[55.6740,12.0280],pop:2100},
+  {name:'Hedehusene',    pos:[55.6524,12.2003],pop:12000},
+  {name:'Ballerup',      pos:[55.7256,12.3540],pop:49000},
+  {name:'Rødovre',       pos:[55.6811,12.4533],pop:39000},
+  {name:'Brøndby',       pos:[55.6588,12.4335],pop:35000},
+  {name:'Vanløse',       pos:[55.6964,12.5095],pop:38000},
+  {name:'Vesterbro',     pos:[55.6716,12.5509],pop:42000},
+  {name:'Nørrebro',      pos:[55.6979,12.5551],pop:80000},
+  {name:'Østerbro',      pos:[55.7147,12.5781],pop:68000},
+  {name:'Amager',        pos:[55.6608,12.5926],pop:90000},
+];
+
+// Grid config
+const GRID_STEP_KM=1.1, CELL_FADE_SECS=3600, CELL_STALE_SECS=720, REDISPATCH_KM=2.5;
+
+// ══════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════
+let simRunning=false, simTime=0, simSpeed=1, simInterval=null, darkMode=true;
+let cloud={...TRUE_CLOUD};
+let drones=[], bases=[];
+let droneMarkers={}, baseMarkers={};
+let zoneRings=[], commsRings=[], showComms=false;
+const popMarkers=[];
+let logLines=[], evacuated=new Set();
+let stepCount=0, estimatedCloudRad=0;
+const gridCells=new Map();
+let cloudHistory=[], historyPolyline=null;
+const forecastCircles={};
+let activeForecastHours=new Set();
+// Expanded vehicle groups
+const expandedVeh=new Set(['B-01','B-02','B-03','B-04','B-05']);
+
+// ══════════════════════════════════════════════════════════
+// GAUSSIAN PLUME
+// ══════════════════════════════════════════════════════════
+function plumeValue(lat,lng,altM){
+  // Coordinate system:
+  // windDeg = FROM direction (meteorological). E.g. 225 = wind FROM SW, moves TO NE.
+  // moveDeg = direction cloud travels = (windDeg+180)%360
+  // xDw = distance downwind (positive = downwind = NE direction)
+  // yCw = distance crosswind
+  const moveDeg=((cloud.windDeg+180)%360);
+  const moveRad=moveDeg*Math.PI/180;
+  const kpLat=111, kpLng=111*Math.cos(cloud.lat*Math.PI/180);
+  const dx=(lng-cloud.lng)*kpLng; // km east
+  const dy=(lat-cloud.lat)*kpLat; // km north
+
+  // Project onto downwind axis
+  // moveRad from north clockwise: downwind unit vector = (sin(moveRad), cos(moveRad)) in (east,north)
+  const xDw = dx*Math.sin(moveRad) + dy*Math.cos(moveRad); // positive = downwind
+  const yCw = dx*Math.cos(moveRad) - dy*Math.sin(moveRad); // crosswind
+
+  // No radiation upwind of source (xDw < -sourceRadius)
+  // Near-source puff exists within a small radius around the release point
+  const sourceR = cloud.radiusKm * 0.5;
+  if(xDw < -sourceR) return 0; // strictly upwind — no plume here
+
+  // Dispersion parameters grow with downwind distance
+  const downDist = Math.max(0.1, xDw); // km downwind from source
+  const sY = cloud.sigmaY * Math.pow(downDist/1.0, 0.9);  // crosswind spread
+  const sZ = Math.max(0.05, cloud.sigmaZ * Math.pow(downDist/1.0, 0.7)); // vertical spread
+
+  // Crosswind Gaussian
+  const gY = Math.exp(-0.5*(yCw/sY)**2);
+
+  // Vertical Gaussian with ground reflection
+  const zKm  = altM/1000;
+  const hKm  = cloud.sourceHeight/1000;
+  const gZ   = Math.exp(-0.5*((zKm-hKm)/sZ)**2)
+              + Math.exp(-0.5*((zKm+hKm)/sZ)**2);
+
+  // Near-source puff: concentrated blob around release point (fades with time)
+  const nearDist = Math.sqrt(xDw**2 + yCw**2);
+  const puffStr  = Math.exp(-0.5*(nearDist/sourceR)**2);
+
+  // Far-field plume decays with downwind distance (dilution)
+  const dilution = 1.0 / Math.max(0.5, downDist * 0.8);
+
+  // Total: puff near source + elongating plume downwind
+  const val = cloud.intensity * (
+      0.35 * puffStr +                    // near-source puff
+      0.65 * gY * gZ * dilution          // downwind plume
+  );
+  return Math.max(0, val);
+}
+
+// ══════════════════════════════════════════════════════════
+// MAP
+// ══════════════════════════════════════════════════════════
+const map=L.map('map',{center:[55.72,12.18],zoom:10});
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {attribution:'© OpenStreetMap',maxZoom:18}).addTo(map);
+
+L.marker(RISO,{icon:L.divIcon({
+  html:`<div style="width:26px;height:26px;background:#ff3366;border:2px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;box-shadow:0 0 14px #ff3366">☢</div>`,
+  iconSize:[26,26],iconAnchor:[13,13],className:''
+})}).addTo(map).bindTooltip('Risø Atomenergianlæg',
+  {permanent:true,direction:'right',className:'riso-tooltip',offset:[14,0]});
+
+function drawZoneRings(){
+  zoneRings.forEach(r=>map.removeLayer(r));zoneRings=[];
+  [[3000,'#ff3366'],[15000,'#ff7800'],[30000,'#ffcc00']].forEach(([r,c])=>{
+    zoneRings.push(L.circle(RISO,{radius:r,color:c,fillColor:c,fillOpacity:.01,
+      weight:1,dashArray:'8,5',opacity:.35}).addTo(map));
+  });
+}
+drawZoneRings();
+
+ZONES.forEach(z=>{
+  const r=latlngKm(z.pos[0],z.pos[1],RISO[0],RISO[1]);
+  const col=r<3?'#ff3366':r<15?'#ff7800':r<30?'#ffcc00':'#39ff8a';
+  const m=L.circleMarker(z.pos,{radius:r<15?6:5,fillColor:col,fillOpacity:.28,color:col,weight:1.5}).addTo(map);
+  m.bindTooltip(`${z.name}<br>${z.pop.toLocaleString()} indb. · ${r.toFixed(1)}km`,{direction:'top'});
+  popMarkers.push({...z,marker:m,distKm:r});
+});
+
+// ══════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════
+function initAll(){
+  drones.forEach(d=>{if(droneMarkers[d.id]) map.removeLayer(droneMarkers[d.id]);});
+  bases.forEach(b=>{if(baseMarkers[b.id]) map.removeLayer(baseMarkers[b.id]);});
+  gridCells.forEach(c=>{if(c.marker) map.removeLayer(c.marker);});
+  gridCells.clear();
+  if(historyPolyline){map.removeLayer(historyPolyline);historyPolyline=null;}
+  cloudHistory=[];
+  Object.values(forecastCircles).forEach(a=>a.forEach(c=>map.removeLayer(c)));
+  Object.keys(forecastCircles).forEach(k=>delete forecastCircles[k]);
+  activeForecastHours.clear();
+  document.querySelectorAll('.fc-btn').forEach(b=>b.classList.remove('on'));
+  document.getElementById('forecast-btn').classList.remove('active-toggle');
+  commsRings.forEach(r=>map.removeLayer(r));commsRings=[];
+  estimatedCloudRad=0;
+
+  // Place vehicles at their starting orbit positions around Risø
+  const INIT_ORBIT_KM = 6;
+  const initMoveDeg = (TRUE_CLOUD.windDeg + 180) % 360;
+  const ikpLat = 111, ikpLng = 111 * Math.cos(RISO[0]*Math.PI/180);
+  bases=BASE_DEFS.map(b=>{
+    const angleOffset = BASE_ANGLE_OFFSETS[b.id] || 0;
+    const angleDeg = (initMoveDeg + angleOffset + 360) % 360;
+    const angleRad = angleDeg * Math.PI / 180;
+    const startLat = RISO[0] + (INIT_ORBIT_KM * Math.cos(angleRad)) / ikpLat;
+    const startLng = RISO[1] + (INIT_ORBIT_KM * Math.sin(angleRad)) / ikpLng;
+    return {...b, lat:startLat, lng:startLng};
+  });
+
+  drones=DRONE_DEFS.map(d=>{
+    const base=bases.find(b=>b.drones.includes(d.id));
+    return{
+      ...d,status:'idle',
+      lat:base.lat,lng:base.lng,
+      homeLat:base.lat,homeLng:base.lng,
+      baseId:base.id,
+      targetLat:null,targetLng:null,targetKey:null,
+      missionAlt:d.sweep.altM,
+      lastMeas:null,commsOk:true,
+    };
+  });
+
+  bases.forEach(b=>{
+    baseMarkers[b.id]=L.marker([b.lat,b.lng],{icon:makeBaseIcon(b)}).addTo(map);
+    baseMarkers[b.id].bindTooltip(b.name,{direction:'bottom',offset:[0,10]});
+  });
+  drones.forEach(d=>{
+    droneMarkers[d.id]=L.marker([d.lat,d.lng],{icon:makeDroneIcon(d),zIndexOffset:600}).addTo(map);
+    droneMarkers[d.id].bindTooltip('',{direction:'top',offset:[0,-12]});
+  });
+  if(showComms) drawCommsRings();
+}
+
+function makeDroneIcon(d){
+  const col=d.commsOk===false?'#ff3366':(d.status==='mission'?d.sweep.color:d.color);
+  const glow=d.status==='mission'?`0 0 7px ${col}`:'none';
+  const op=d.status==='charging'?.35:1;
+  return L.divIcon({
+    html:`<div style="width:13px;height:13px;background:${col};border:2px solid rgba(255,255,255,.8);border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:7px;box-shadow:${glow};opacity:${op};transform:rotate(45deg)"><span style="transform:rotate(-45deg)">✈</span></div>`,
+    iconSize:[13,13],iconAnchor:[6,6],className:''
+  });
+}
+function makeBaseIcon(b){
+  return L.divIcon({
+    html:`<div style="font-size:18px;filter:drop-shadow(0 0 5px ${b.color})">${b.icon}</div>`,
+    iconSize:[22,22],iconAnchor:[11,11],className:''
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+// COMMS RANGE RINGS
+// ══════════════════════════════════════════════════════════
+function drawCommsRings(){
+  commsRings.forEach(r=>map.removeLayer(r));commsRings=[];
+  bases.forEach(b=>{
+    const c1=L.circle([b.lat,b.lng],{
+      radius:COMMS_RANGE_KM*1000,
+      color:b.color,fillColor:b.color,fillOpacity:.03,
+      weight:1,dashArray:'4,4',opacity:.4,
+    }).addTo(map);
+    const c2=L.circle([b.lat,b.lng],{
+      radius:COMMS_WEAK_KM*1000,
+      color:b.color,fillColor:'transparent',
+      weight:0.7,dashArray:'2,5',opacity:.25,
+    }).addTo(map);
+    commsRings.push(c1,c2);
+  });
+}
+
+function toggleCommsRings(){
+  showComms=!showComms;
+  document.getElementById('comms-btn').classList.toggle('active-toggle',showComms);
+  if(showComms) drawCommsRings();
+  else{commsRings.forEach(r=>map.removeLayer(r));commsRings=[];}
+}
+
+// ══════════════════════════════════════════════════════════
+// GRID
+// ══════════════════════════════════════════════════════════
+function stepDegLat(){return GRID_STEP_KM/111;}
+function stepDegLng(){return GRID_STEP_KM/(111*Math.cos(cloud.lat*Math.PI/180));}
+function cellWorldPos(di,dj){return[cloud.lat+di*stepDegLat(),cloud.lng+dj*stepDegLng()];}
+function worldToCell(lat,lng){
+  return[Math.round((lat-cloud.lat)/stepDegLat()),Math.round((lng-cloud.lng)/stepDegLng())];
+}
+function cellKey(di,dj){return`${di},${dj}`;}
+
+function pickTarget(takenKeys, droneId){
+  // Build a flat list of ALL candidate cells in the search area,
+  // then distribute them round-robin by drone index.
+  // This guarantees every part of the area gets a drone assigned.
+
+  const moveDeg = (cloud.windDeg + 180) % 360;
+  const moveRad = moveDeg * Math.PI / 180;
+  const kpLat   = 111;
+  const kpLng   = 111 * Math.cos(cloud.lat * Math.PI / 180);
+
+  const baseR        = Math.max(estimatedCloudRad, TRUE_CLOUD.radiusKm, 3);
+  const searchDownKm = baseR * 3.0 + 6;   // far downwind
+  const searchUpKm   = 1.0;               // tiny upwind margin
+  const searchCrossKm= baseR * 1.8 + 3;
+
+  const maxDi = Math.ceil((searchDownKm + searchUpKm) / GRID_STEP_KM) + 1;
+  const maxDj = Math.ceil(searchCrossKm / GRID_STEP_KM) + 1;
+
+  // Drone index 0-49
+  const droneIdx = droneId ? (parseInt(droneId.replace('D-','')) - 1) : 0;
+  const totalDrones = 50;
+
+  // Collect all cells in the search area, sorted by priority
+  // (unmeasured/stale first, then by downwind distance descending)
+  const allCells = [];
+
+  for(let di = -maxDi; di <= maxDi; di++){
+    for(let dj = -maxDj; dj <= maxDj; dj++){
+      const cellLat = cloud.lat + di * stepDegLat();
+      const cellLng = cloud.lng + dj * stepDegLng();
+
+      const dxKm = (cellLng - cloud.lng) * kpLng;
+      const dyKm = (cellLat - cloud.lat) * kpLat;
+      const xDw  =  dxKm * Math.sin(moveRad) + dyKm * Math.cos(moveRad);
+      const yCw  =  dxKm * Math.cos(moveRad) - dyKm * Math.sin(moveRad);
+
+      if(xDw < -searchUpKm || xDw > searchDownKm) continue;
+      if(Math.abs(yCw) > searchCrossKm) continue;
+
+      const key  = cellKey(di, dj);
+      const cell = gridCells.get(key);
+      const age  = cell ? simTime - cell.time : Infinity;
+      if(age < CELL_STALE_SECS) continue; // fresh — skip
+
+      // Sort key: unmeasured first (age=Infinity → large number), then by downwind desc
+      // Multiply xDw to spread drones along the full plume length
+      const sortVal = (age === Infinity ? 1e9 : age) + xDw * 200;
+
+      allCells.push({di, dj, key, age, xDw, yCw, sortVal});
+    }
+  }
+
+  if(allCells.length === 0) return null;
+
+  // Sort: highest sortVal first (unmeasured far-downwind cells at top)
+  allCells.sort((a, b) => b.sortVal - a.sortVal);
+
+  // Round-robin: drone N gets cell at index N, N+totalDrones, N+2*totalDrones...
+  // Pick the first available (not in takenKeys)
+  for(let i = droneIdx; i < allCells.length; i += totalDrones){
+    if(!takenKeys.has(allCells[i].key)) return allCells[i];
+  }
+
+  // Fallback: any available cell
+  for(const c of allCells){
+    if(!takenKeys.has(c.key)) return c;
+  }
+
+  return null;
+}
+
+function takenKeys(){
+  const s=new Set();
+  drones.forEach(d=>{if(d.targetKey) s.add(d.targetKey);});
+  return s;
+}
+
+// ══════════════════════════════════════════════════════════
+// SIM STEP
+// ══════════════════════════════════════════════════════════
+function stepSim(){
+  simTime+=simSpeed;stepCount++;
+  const hours=simTime/3600;
+
+  // Advance cloud
+  const moveDeg=(cloud.windDeg+180)%360;
+  const dKm=cloud.windSpd*simSpeed/3600;
+  const kpLat=111,kpLng=111*Math.cos(cloud.lat*Math.PI/180);
+  cloud.lat+=dKm*Math.cos(moveDeg*Math.PI/180)/kpLat;
+  cloud.lng+=dKm*Math.sin(moveDeg*Math.PI/180)/kpLng;
+  cloud.radiusKm=TRUE_CLOUD.radiusKm+hours*0.5;
+  cloud.sigmaY=TRUE_CLOUD.sigmaY+hours*0.3;
+  cloud.sigmaZ=TRUE_CLOUD.sigmaZ+hours*0.05;
+  cloud.intensity=TRUE_CLOUD.intensity*Math.exp(-hours*0.085);
+  cloud.windDeg+=(Math.random()-.5)*0.2;
+
+  // History trail
+  if(stepCount%20===0){
+    cloudHistory.push({lat:cloud.lat,lng:cloud.lng});
+    if(cloudHistory.length>200) cloudHistory.shift();
+    updateHistoryTrail();
+  }
+
+  // No mid-mission redispatch — drones complete their assigned target
+  // New assignments happen naturally when they arrive and call assignNextTarget
+
+  // Move bases
+  bases.forEach(b=>moveBase(b));
+
+  // Update comms rings position
+  if(showComms&&stepCount%5===0) drawCommsRings();
+
+  // Step drones
+  drones.forEach(d=>stepDrone(d));
+
+  if(simTime%15===0) autoSchedule();
+  if(stepCount%3===0) renderGrid();
+  if(stepCount%40===0) refreshForecasts();
+
+  updateVehicleDroneList();
+  updateReadings();
+  updateWindDisplay();
+  updateEvac();
+  updateTimeBar();
+  if(stepCount%5===0) drawProfile();
+  updateClock();
+}
+
+// ══════════════════════════════════════════════════════════
+// HISTORY TRAIL
+// ══════════════════════════════════════════════════════════
+function updateHistoryTrail(){
+  if(cloudHistory.length<2) return;
+  if(historyPolyline) map.removeLayer(historyPolyline);
+  historyPolyline=L.polyline(cloudHistory.map(h=>[h.lat,h.lng]),{
+    color:'rgba(255,200,0,0.45)',weight:2,dashArray:'4,4',
+  }).addTo(map);
+}
+
+// ══════════════════════════════════════════════════════════
+// FORECAST
+// ══════════════════════════════════════════════════════════
+function forecastPos(h){
+  const moveDeg=(cloud.windDeg+180)%360;
+  const dKm=cloud.windSpd*h*3600/1000;
+  const kpLat=111,kpLng=111*Math.cos(cloud.lat*Math.PI/180);
+  return{
+    lat:cloud.lat+dKm*Math.cos(moveDeg*Math.PI/180)/kpLat,
+    lng:cloud.lng+dKm*Math.sin(moveDeg*Math.PI/180)/kpLng,
+    rad:cloud.radiusKm+h*0.5,
+    sigY:cloud.sigmaY+h*0.3,
+  };
+}
+function buildForecastCircles(h){
+  const fc=forecastPos(h);
+  const op=Math.max(0.06,0.18-h*0.012);
+  const arr=['#ff3366','#ff7800','#ffdc00','#39ff8a'].map((c,i)=>
+    L.circle([fc.lat,fc.lng],{radius:fc.rad*(0.3+i*0.4)*1000,color:c,fillColor:c,
+      fillOpacity:op,weight:1,dashArray:'5,4',opacity:0.35}).addTo(map));
+  arr.push(L.marker([fc.lat,fc.lng],{icon:L.divIcon({
+    html:`<div style="font-family:'Share Tech Mono',monospace;font-size:10px;color:#ffcc00;white-space:nowrap;text-shadow:0 0 4px #000">+${h}h</div>`,
+    className:'',iconAnchor:[12,-4],
+  })}).addTo(map));
+  return arr;
+}
+function refreshForecasts(){
+  activeForecastHours.forEach(h=>{
+    if(forecastCircles[h]) forecastCircles[h].forEach(c=>map.removeLayer(c));
+    forecastCircles[h]=buildForecastCircles(h);
+  });
+}
+function toggleForecast(h){
+  const btn=document.querySelector(`.fc-btn[data-h="${h}"]`);
+  if(activeForecastHours.has(h)){
+    activeForecastHours.delete(h);
+    if(forecastCircles[h]){forecastCircles[h].forEach(c=>map.removeLayer(c));delete forecastCircles[h];}
+    btn&&btn.classList.remove('on');
+  } else {
+    activeForecastHours.add(h);
+    forecastCircles[h]=buildForecastCircles(h);
+    btn&&btn.classList.add('on');
+    const fc=forecastPos(h);
+    const near=ZONES.map(z=>({...z,d:latlngKm(z.pos[0],z.pos[1],fc.lat,fc.lng)}))
+      .filter(z=>z.d<fc.rad*1.5).sort((a,b)=>a.d-b.d);
+    document.getElementById('forecast-info').innerHTML=
+      `+${h}h: ${fc.lat.toFixed(3)}°N ${fc.lng.toFixed(3)}°Ø · R≈${fc.rad.toFixed(1)}km<br>`+
+      (near.length?`Farezonen: ${near.slice(0,3).map(z=>z.name).join(', ')}`:'Ingen byer i estimeret farezonen');
+  }
+}
+function toggleAllForecasts(){
+  const any=activeForecastHours.size>0;
+  [1,2,4,8].forEach(h=>{
+    if(any){activeForecastHours.delete(h);if(forecastCircles[h]){forecastCircles[h].forEach(c=>map.removeLayer(c));delete forecastCircles[h];}}
+    else{activeForecastHours.add(h);forecastCircles[h]=buildForecastCircles(h);}
+  });
+  document.querySelectorAll('.fc-btn').forEach(b=>b.classList.toggle('on',!any));
+  document.getElementById('forecast-btn').classList.toggle('active-toggle',!any);
+}
+
+// ══════════════════════════════════════════════════════════
+// BASE MOVEMENT — road-constrained, no water
+// ══════════════════════════════════════════════════════════
+function moveBase(b){
+  // Vehicles are stationary — fixed positions around Risø
+  baseMarkers[b.id].setLatLng([b.lat, b.lng]);
+  drones.filter(d=>d.baseId===b.id&&(d.status==='idle'||d.status==='charging')).forEach(d=>{
+    d.homeLat=b.lat; d.homeLng=b.lng;
+    if(d.status==='idle'){ d.lat=b.lat; d.lng=b.lng; }
+  });
+}
+
+function stepDrone(d){
+  // Comms check: distance from home base
+  const base=bases.find(x=>x.id===d.baseId);
+  if(base){
+    const distFromBase=latlngKm(d.lat,d.lng,base.lat,base.lng);
+    const prevComms=d.commsOk;
+    d.commsOk= distFromBase<=COMMS_RANGE_KM;
+    d.commsWeak= distFromBase>COMMS_WEAK_KM && distFromBase<=COMMS_RANGE_KM;
+    // Lost comms — force return
+    if(!d.commsOk && d.status==='mission'){
+      d.status='returning';d.targetLat=d.homeLat;d.targetLng=d.homeLng;
+      if(prevComms) addLog(`${d.id} → KOMMUNIKATION TABT — RETURNERER`,'alert');
+    }
+    // Regained comms
+    if(d.commsOk&&!prevComms&&d.status==='returning'){
+      addLog(`${d.id} → KOMMUNIKATION GENOPRETTET`,'ok');
+    }
+  }
+
+  if(d.status==='charging'){
+    d.battery=Math.min(100,d.battery+(100/1300)*simSpeed);
+    if(base){d.lat=base.lat;d.lng=base.lng;d.homeLat=base.lat;d.homeLng=base.lng;}
+    if(d.battery>=96){d.status='idle';addLog(`${d.id} → KLAR`,'ok');}
+  } else if(d.status==='idle'){
+    if(base){d.lat=base.lat;d.lng=base.lng;}
+  } else if(d.status==='mission'){
+    // Wind-adjusted battery
+    const windToRad=((cloud.windDeg+180)%360)*Math.PI/180;
+    const flyDlat=d.targetLat-d.lat,flyDlng=d.targetLng-d.lng;
+    const flyDist=Math.sqrt(flyDlat**2+flyDlng**2);
+    let hwf=1.0;
+    if(flyDist>0.0001){
+      const fa=Math.atan2(flyDlng,flyDlat);
+      const wa=Math.PI/2-windToRad;
+      hwf=1.0+Math.cos(fa-wa)*0.35*(cloud.windSpd/5.0);
+    }
+    d.battery=Math.max(0,d.battery-0.015*simSpeed*hwf);
+    moveToward(d,d.targetLat,d.targetLng,0.0020);
+    if(stepCount%4===0) sampleAt(d);
+    if(dist2D(d.lat,d.lng,d.targetLat,d.targetLng)<0.0006){
+      sampleAt(d);d.targetKey=null;
+      if(d.battery<10){d.status='returning';d.targetLat=d.homeLat;d.targetLng=d.homeLng;addLog(`${d.id} → HJEM`,'warn');}
+      else assignNextTarget(d);
+    }
+  } else if(d.status==='returning'){
+    moveToward(d,d.homeLat,d.homeLng,0.0030);
+    d.battery=Math.max(0,d.battery-0.010*simSpeed);
+    if(dist2D(d.lat,d.lng,d.homeLat,d.homeLng)<0.0007){
+      d.lat=d.homeLat;d.lng=d.homeLng;d.status='charging';
+      addLog(`${d.id} → OPLADER`,'ok');
+    }
+  }
+
+  droneMarkers[d.id].setLatLng([d.lat,d.lng]);
+  droneMarkers[d.id].setIcon(makeDroneIcon(d));
+  const commsLbl=d.commsOk?(d.commsWeak?'📶SVAG':'📶OK'):'📵TABT';
+  droneMarkers[d.id].setTooltipContent(
+    `${d.id}[${d.sweep.label}@${d.missionAlt}m] ${commsLbl} | ${d.status.toUpperCase()} | 🔋${d.battery.toFixed(0)}% | ${d.lastMeas!=null?d.lastMeas.toFixed(1)+' μSv/h':'—'}`);
+}
+
+function moveToward(d,tlat,tlng,spd){
+  const dlat=tlat-d.lat,dlng=tlng-d.lng;
+  const dist=Math.sqrt(dlat*dlat+dlng*dlng);
+  if(dist<spd*simSpeed){d.lat=tlat;d.lng=tlng;return;}
+  const f=spd*simSpeed/dist;d.lat+=dlat*f;d.lng+=dlng*f;
+}
+
+// ══════════════════════════════════════════════════════════
+// MEASUREMENT
+// ══════════════════════════════════════════════════════════
+function sampleAt(d){
+  if(!d.commsOk) return; // can't transmit data
+  const val=Math.max(0.04,plumeValue(d.lat,d.lng,d.missionAlt)*(1+(Math.random()-.5)*0.08));
+  d.lastMeas=val;
+  const[di,dj]=worldToCell(d.lat,d.lng);
+  const key=cellKey(di,dj);
+  const[clat,clng]=cellWorldPos(di,dj);
+  const ex=gridCells.get(key);
+  if(ex){ex.value=val;ex.time=simTime;ex.altM=d.missionAlt;ex.lat=clat;ex.lng=clng;}
+  else{
+    const m=L.circleMarker([clat,clng],{radius:5,fillColor:measColor(val,.78),fillOpacity:.78,
+      color:measColor(val,.35),opacity:.35,weight:0}).addTo(map);
+    m.bindTooltip('',{direction:'top'});
+    gridCells.set(key,{di,dj,lat:clat,lng:clng,value:val,time:simTime,altM:d.missionAlt,marker:m});
+  }
+  if(val>10){const r=latlngKm(d.lat,d.lng,cloud.lat,cloud.lng);if(r>estimatedCloudRad)estimatedCloudRad=r;}
+}
+function measColor(val,op){
+  const[r,g,b]=val>1000?[255,20,80]:val>100?[255,100,0]:val>10?[255,210,0]:[40,255,130];
+  return`rgba(${r},${g},${b},${op})`;
+}
+
+function renderGrid(){
+  const del=[];
+  gridCells.forEach((cell,key)=>{
+    const age=simTime-cell.time;
+    const op=Math.max(0,1-age/CELL_FADE_SECS);
+    if(op<=0.02){del.push(key);return;}
+    const[clat,clng]=cellWorldPos(cell.di,cell.dj);
+    cell.lat=clat;cell.lng=clng;cell.marker.setLatLng([clat,clng]);
+    cell.marker.setStyle({fillColor:measColor(cell.value,op*.78),fillOpacity:op*.78,
+      color:measColor(cell.value,op*.35),opacity:op*.35});
+    cell.marker.setTooltipContent(`${cell.value.toFixed(1)} μSv/h @ ${Math.round(cell.altM)}m · ${Math.round(age/60)}min`);
+  });
+  del.forEach(k=>{map.removeLayer(gridCells.get(k).marker);gridCells.delete(k);});
+}
+
+function computeCoverage(){
+  const sr=Math.max(estimatedCloudRad*1.3,TRUE_CLOUD.radiusKm)+1;
+  const mc=Math.ceil(sr/GRID_STEP_KM);
+  let total=0,fresh=0;
+  for(let di=-mc;di<=mc;di++)for(let dj=-mc;dj<=mc;dj++){
+    if(Math.sqrt((di*GRID_STEP_KM)**2+(dj*GRID_STEP_KM)**2)>sr) continue;
+    total++;
+    const c=gridCells.get(cellKey(di,dj));
+    if(c&&simTime-c.time<CELL_STALE_SECS) fresh++;
+  }
+  return total>0?fresh/total:0;
+}
+
+// ══════════════════════════════════════════════════════════
+// SCHEDULING
+// ══════════════════════════════════════════════════════════
+function assignNextTarget(d){
+  const t=pickTarget(takenKeys(), d.id);
+  if(!t){d.status='returning';d.targetLat=d.homeLat;d.targetLng=d.homeLng;return;}
+  const[lat,lng]=cellWorldPos(t.di,t.dj);
+  d.targetLat=lat;d.targetLng=lng;d.targetKey=t.key;
+  d.missionAlt=d.sweep.altM+(Math.random()-.5)*40;
+}
+
+function autoSchedule(){
+  const active=drones.filter(d=>d.status==='mission'||d.status==='returning').length;
+  if(active>=40) return;
+  const idle=drones.filter(d=>d.status==='idle'&&d.battery>22);
+  let launched=0;
+  for(let i=0;i<idle.length && (active+launched)<40;i++){
+    // takenKeys() re-evaluated each iteration so each drone gets a unique cell
+    if(launchDrone(idle[i])) launched++;
+  }
+}
+
+function launchDrone(d){
+  const t=pickTarget(takenKeys(), d.id);
+  if(!t) return false;
+  const[lat,lng]=cellWorldPos(t.di,t.dj);
+  d.targetLat=lat;d.targetLng=lng;d.targetKey=t.key;
+  d.missionAlt=d.sweep.altM+(Math.random()-.5)*40;
+  d.status='mission';
+  addLog(`${d.id}[${d.sweep.label}] → ${t.age===Infinity?'NY':'GENBESØG'}`,'ok');
+  return true;
+}
+
+function deployAll(){
+  drones.forEach(d=>{if(d.status==='idle'&&d.battery>22) launchDrone(d);});
+  updateVehicleDroneList();
+}
+
+// ══════════════════════════════════════════════════════════
+// UI — grouped vehicle/drone list
+// ══════════════════════════════════════════════════════════
+function toggleVehExpand(id){
+  expandedVeh.has(id)?expandedVeh.delete(id):expandedVeh.add(id);
+  updateVehicleDroneList();
+}
+
+function updateVehicleDroneList(){
+  const total=drones.length;
+  const inMission=drones.filter(d=>d.status==='mission').length;
+  const commsOkCount=drones.filter(d=>d.commsOk!==false).length;
+  document.getElementById('drone-summary').textContent=`${inMission} aktive`;
+  document.getElementById('comms-ok-count').textContent=commsOkCount;
+
+  const html=bases.map(b=>{
+    const myDrones=drones.filter(d=>d.baseId===b.id);
+    const act=myDrones.filter(d=>d.status==='mission'||d.status==='returning').length;
+    const commsAll=myDrones.every(d=>d.commsOk!==false);
+    const commsSome=myDrones.some(d=>d.commsOk!==false);
+    const commsClass=commsAll?'comms-ok':commsSome?'comms-weak':'comms-lost';
+    const commsLbl=commsAll?'KOMMS OK':commsSome?'SVAG':'TABT';
+    const isOpen=expandedVeh.has(b.id);
+
+    const droneRows=myDrones.map(d=>{
+      const bc=d.battery>50?'var(--ok)':d.battery>20?'var(--warning)':'var(--danger)';
+      const ms=d.lastMeas!=null?d.lastMeas.toFixed(0)+'μ':'—';
+      const mc=d.lastMeas==null?'var(--text-dim)':d.lastMeas>500?'var(--danger)':d.lastMeas>100?'var(--warning)':'var(--accent)';
+      const sc=!d.commsOk?'s-comms-out':'s-'+d.status;
+      const sl=!d.commsOk?'TABT':d.status.slice(0,5).toUpperCase();
+      return`<div class="drone-mini ${d.status}${!d.commsOk?' comms-out':''}" onclick="focusDrone('${d.id}')">
+        <div class="dm-id" style="color:${d.sweep.color}">${d.id}</div>
+        <div class="dm-batt">
+          <div class="dm-batt-bar"><div class="dm-batt-fill" style="width:${d.battery.toFixed(0)}%;background:${bc}"></div></div>
+          <div class="dm-batt-txt">${d.battery.toFixed(0)}% ${d.sweep.label}</div>
+        </div>
+        <div class="dm-status ${sc}">${sl}</div>
+        <div class="dm-meas" style="color:${mc}">${ms}</div>
+      </div>`;
+    }).join('');
+
+    return`<div class="veh-group">
+      <div class="veh-header" onclick="toggleVehExpand('${b.id}')">
+        <span class="veh-icon">${b.icon}</span>
+        <span class="veh-name" style="color:${b.color}">${b.name}</span>
+        <div class="veh-stats">
+          <span>${act}/${myDrones.length}</span>
+          <span class="veh-comms ${commsClass}">${commsLbl}</span>
+          <span class="veh-expand">${isOpen?'▲':'▼'}</span>
+        </div>
+      </div>
+      <div class="veh-drones ${isOpen?'open':''}">${droneRows}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('vehicle-drone-list').innerHTML=html;
+}
+
+function updateReadings(){
+  const fresh=[];
+  gridCells.forEach(c=>{if(simTime-c.time<CELL_STALE_SECS) fresh.push(c.value);});
+  const maxV=fresh.length?Math.max(...fresh):null;
+  const avgV=fresh.length?fresh.reduce((a,b)=>a+b,0)/fresh.length:null;
+  const cov=computeCoverage();
+  document.getElementById('rv-max').textContent=maxV!=null?maxV.toFixed(1):'—';
+  document.getElementById('rv-avg').textContent=avgV!=null?avgV.toFixed(1):'—';
+  document.getElementById('rv-rad').textContent=estimatedCloudRad>0?estimatedCloudRad.toFixed(1):'?';
+  document.getElementById('rv-pts').textContent=String(gridCells.size);
+  const pct=Math.round(cov*100);
+  document.getElementById('coverage-pct').textContent=pct+'%';
+  document.getElementById('coverage-bar').style.width=pct+'%';
+  document.getElementById('ri-max').classList.toggle('danger-level',maxV!=null&&maxV>500);
+  document.getElementById('ri-max').classList.toggle('warning-level',maxV!=null&&maxV>100&&maxV<=500);
+  document.getElementById('ri-avg').classList.toggle('danger-level',avgV!=null&&avgV>200);
+  document.getElementById('ri-avg').classList.toggle('warning-level',avgV!=null&&avgV>50&&avgV<=200);
+}
+
+function updateWindDisplay(){
+  const wToDeg=(cloud.windDeg+180)%360;
+  document.getElementById('wind-g').setAttribute('transform',`rotate(${wToDeg},28,28)`);
+  document.getElementById('ws-from').textContent=deg2compass(cloud.windDeg);
+  document.getElementById('ws-to').textContent=deg2compass(wToDeg);
+  document.getElementById('ws-spd').textContent=cloud.windSpd.toFixed(1);
+  document.getElementById('ws-temp').textContent=cloud.temp.toFixed(1);
+}
+
+function updateEvac(){
+  const rows=popMarkers.map(p=>{
+    const near=[];
+    gridCells.forEach(c=>{if(simTime-c.time<CELL_STALE_SECS&&latlngKm(c.lat,c.lng,p.pos[0],p.pos[1])<6) near.push(c.value);});
+    const estVal=near.length?near.reduce((a,b)=>a+b,0)/near.length:null;
+    const modelVal=plumeValue(p.pos[0],p.pos[1],10);
+    const val=estVal!=null?estVal:(gridCells.size>15?modelVal:0);
+    let status,cls;
+    if(val>100){
+      status='EVAKUER';cls='evac-evacuate';
+      if(!evacuated.has(p.name)){
+        evacuated.add(p.name);
+        showNotif('⚠ EVAKUERING',`${p.name} — ${p.pop.toLocaleString()} indb.`,true);
+        addLog(`${p.name.toUpperCase()} → EVAKUERING`,'alert');
+        document.getElementById('alert-badge').classList.remove('hidden');
+      }
+    } else if(val>20){status='BEREDSKAB';cls='evac-watch';}
+    else{status='CLEAR';cls='evac-clear';evacuated.delete(p.name);}
+    if(evacuated.size===0) document.getElementById('alert-badge').classList.add('hidden');
+    p.marker.setStyle({fillColor:cls.includes('evacuate')?'#ff3366':cls.includes('watch')?'#ffcc00':'#39ff8a',color:cls.includes('evacuate')?'#ff3366':cls.includes('watch')?'#ffcc00':'#39ff8a'});
+    return`<div class="evac-zone">
+      <span class="evac-icon">🏘</span>
+      <div class="evac-info">
+        <div class="evac-name">${p.name}</div>
+        <div class="evac-pop">${p.pop.toLocaleString()} · ${p.distKm.toFixed(0)}km</div>
+      </div>
+      <div class="evac-status ${cls}">${status}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('evac-zones').innerHTML=rows;
+}
+
+function updateTimeBar(){
+  document.getElementById('time-bar').style.width=Math.min(100,simTime/(3600*8)*100)+'%';
+  const h=Math.floor(simTime/3600),m=Math.floor((simTime%3600)/60);
+  document.getElementById('time-val').textContent=`T+${h}h${String(m).padStart(2,'0')}m`;
+}
+function updateClock(){document.getElementById('clock').textContent=new Date().toTimeString().slice(0,8);}
+
+function drawProfile(){
+  const cv=document.getElementById('profile-canvas');
+  cv.width=cv.offsetWidth||222;cv.height=cv.offsetHeight||72;
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  const fresh=[];
+  gridCells.forEach(c=>{if(simTime-c.time<CELL_STALE_SECS) fresh.push(c);});
+  if(fresh.length>0){
+    const BINS=24,maxAlt=1000;
+    const bins=new Array(BINS).fill(0),counts=new Array(BINS).fill(0);
+    fresh.forEach(c=>{const bi=Math.min(BINS-1,Math.floor(c.altM/maxAlt*BINS));bins[bi]+=c.value;counts[bi]++;});
+    const avgs=bins.map((v,i)=>counts[i]?v/counts[i]:0);
+    const maxA=Math.max(...avgs,1);
+    const grad=ctx.createLinearGradient(0,0,0,H);
+    grad.addColorStop(0,'rgba(255,51,102,.8)');grad.addColorStop(.5,'rgba(255,120,0,.7)');grad.addColorStop(1,'rgba(0,255,136,.3)');
+    ctx.beginPath();ctx.moveTo(0,H);
+    avgs.forEach((a,i)=>ctx.lineTo((i/BINS)*W+(W/BINS)*.5,H-(a/maxA)*(H*.82)));
+    ctx.lineTo(W,H);ctx.closePath();ctx.fillStyle=grad;ctx.fill();
+  } else {
+    ctx.fillStyle='rgba(90,122,154,.1)';ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='rgba(90,122,154,.5)';ctx.font="9px 'Share Tech Mono'";ctx.textAlign='center';ctx.fillText('Afventer data...',W/2,H/2+3);
+  }
+  ctx.strokeStyle='rgba(0,229,255,0.45)';ctx.lineWidth=1.5;ctx.beginPath();
+  for(let altM=0;altM<=1000;altM+=20){
+    const v=plumeValue(cloud.lat,cloud.lng,altM);
+    const norm=Math.min(1,v/Math.max(1,cloud.intensity));
+    const x=W*0.55+norm*(W*0.42);
+    const y=H-(altM/1000)*H;
+    altM===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+  ctx.fillStyle=darkMode?'#3a5a7a':'#8090a0';ctx.font="8px 'Share Tech Mono'";
+  ctx.textAlign='left';ctx.fillText('0m',2,H-2);ctx.textAlign='right';ctx.fillText('1km',W-2,H-2);
+  drones.filter(d=>d.status==='mission').forEach(d=>{
+    const y=H-(d.missionAlt/1000)*H;
+    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W*.55,y);
+    ctx.strokeStyle=d.sweep.color;ctx.lineWidth=0.8;ctx.setLineDash([2,3]);ctx.stroke();ctx.setLineDash([]);
+  });
+  const sweeps=[...new Set(drones.filter(d=>d.status==='mission').map(d=>d.sweep.label))];
+  document.getElementById('sweep-info').textContent=sweeps.join(' ')||'ingen';
+}
+
+// ══════════════════════════════════════════════════════════
+// UTILS
+// ══════════════════════════════════════════════════════════
+function latlngKm(a,b,c,d){const R=6371,dl=(c-a)*Math.PI/180,dn=(d-b)*Math.PI/180;const x=Math.sin(dl/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dn/2)**2;return R*2*Math.asin(Math.sqrt(x));}
+function dist2D(a,b,c,d){return Math.sqrt((a-c)**2+(b-d)**2);}
+function deg2compass(deg){const d=['N','NNØ','NØ','ØNØ','Ø','ØSØ','SØ','SSØ','S','SSV','SV','VSV','V','VNV','NV','NNV'];return d[Math.round(((deg%360)+360)%360/22.5)%16];}
+function addLog(msg,type=''){
+  logLines.unshift({time:new Date().toTimeString().slice(0,8),msg,type});
+  if(logLines.length>80) logLines.pop();
+  document.getElementById('log').innerHTML=logLines.map(l=>`<div class="log-entry log-${l.type}"><span class="lt">${l.time}</span><span class="lm"> ${l.msg}</span></div>`).join('');
+}
+function showNotif(title,body,danger=false){
+  document.getElementById('notif-title').textContent=title;
+  document.getElementById('notif-body').textContent=body;
+  const el=document.getElementById('notif');
+  el.style.borderColor=danger?'var(--danger)':'var(--accent)';
+  el.classList.add('show');setTimeout(()=>el.classList.remove('show'),6000);
+}
+
+// ══════════════════════════════════════════════════════════
+// CONTROLS
+// ══════════════════════════════════════════════════════════
+function toggleSim(){
+  simRunning=!simRunning;
+  const btn=document.getElementById('sim-btn');
+  if(simRunning){
+    btn.textContent='⏸ PAUSE';btn.classList.add('danger');
+    simInterval=setInterval(()=>{for(let i=0;i<Math.ceil(simSpeed);i++) stepSim();},80);
+    addLog('SIMULATION STARTET','ok');
+    showNotif('Beredskab aktiveret','50 droner på 5 køretøjer · Mobilnet OFFLINE · Radiolink 15km');
+  } else {
+    btn.textContent='▶ START';btn.classList.remove('danger');
+    clearInterval(simInterval);addLog('SIMULATION PAUSERET');
+  }
+}
+function updateSpeed(v){simSpeed=parseInt(v);document.getElementById('speed-val').textContent=v+'×';}
+function resetSim(){
+  if(simRunning) toggleSim();
+  simTime=0;stepCount=0;
+  Object.assign(cloud,TRUE_CLOUD);
+  gridCells.forEach(c=>map.removeLayer(c.marker));gridCells.clear();
+  if(historyPolyline){map.removeLayer(historyPolyline);historyPolyline=null;}
+  cloudHistory=[];
+  Object.values(forecastCircles).forEach(a=>a.forEach(c=>map.removeLayer(c)));
+  Object.keys(forecastCircles).forEach(k=>delete forecastCircles[k]);
+  activeForecastHours.clear();
+  commsRings.forEach(r=>map.removeLayer(r));commsRings=[];
+  showComms=false;
+  document.getElementById('comms-btn').classList.remove('active-toggle');
+  document.getElementById('forecast-btn').classList.remove('active-toggle');
+  document.querySelectorAll('.fc-btn').forEach(b=>b.classList.remove('on'));
+  evacuated.clear();logLines=[];estimatedCloudRad=0;
+  document.getElementById('alert-badge').classList.add('hidden');
+  document.getElementById('forecast-info').textContent='Vælg tidshorisont ovenfor';
+  initAll();
+  updateVehicleDroneList();updateReadings();updateWindDisplay();updateEvac();updateTimeBar();
+  document.getElementById('log').innerHTML='';
+  addLog('SYSTEM RESET — KLAR','ok');
+  addLog('RISØ — UDSLIP DETEKTERET','alert');
+  addLog('MOBILNET OFFLINE — KUN RADIOLINK 15KM','warn');
+  addLog('50 DRONER PÅ 5 KØRETØJER — KLAR','ok');
+  addLog('VIND: FRA SV → MOD NØ','warn');
+}
+function focusDrone(id){const d=drones.find(x=>x.id===id);if(d) map.setView([d.lat,d.lng],14);}
+function toggleTheme(){darkMode=!darkMode;document.body.classList.toggle('light',!darkMode);document.getElementById('theme-btn').textContent=darkMode?'☀ LIGHT':'🌙 DARK';}
+
+// ══════════════════════════════════════════════════════════
+// BOOT
+// ══════════════════════════════════════════════════════════
+initAll();
+updateVehicleDroneList();updateWindDisplay();updateEvac();
+updateClock();drawProfile();
+setInterval(updateClock,1000);
+setTimeout(()=>{updateEvac();drawProfile();updateWindDisplay();},300);
+window.addEventListener('resize',()=>drawProfile());
+
+addLog('NUCLEARWATCH v8.0 INITIALISERET','ok');
+addLog('RISØ ATOMENERGIANLÆG — INCIDENT LEVEL 4','alert');
+addLog('50 DRONER · 5 KØRETØJER PÅ LANDJORD','ok');
+addLog('RADIOLINK 15KM · MOBILNET OFFLINE','warn');
+addLog('TRYK 📡 KOMMS FOR AT SE RÆKKEVIDDE','ok');
+addLog('RADIOAKTIV SKY UKENDT — TRYK START','warn');
+</script>
+</body>
+</html>
