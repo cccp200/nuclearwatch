@@ -599,15 +599,17 @@ function initAll(){
   commsRings.forEach(r=>map.removeLayer(r)); commsRings=[];
   estimatedCloudRad=0;
 
-  const INIT_ORBIT_KM = 6;
+  // Vehicles start orbiting cloud centroid at safe distance
+  const initSafeOrbitKm = Math.max(TRUE_CLOUD.sigmaY * 3, TRUE_CLOUD.radiusKm * 2) + 2.5;
   const initMoveDeg = (TRUE_CLOUD.windDeg + 180) % 360;
-  const ikpLat = 111, ikpLng = 111 * Math.cos(RISO[0]*Math.PI/180);
+  const ikpLat = 111, ikpLng = 111 * Math.cos(cloud.lat*Math.PI/180);
   bases=BASE_DEFS.map(b=>{
     const angleOffset = BASE_ANGLE_OFFSETS[b.id] || 0;
     const angleDeg = (initMoveDeg + angleOffset + 360) % 360;
     const angleRad = angleDeg * Math.PI / 180;
-    const startLat = RISO[0] + (INIT_ORBIT_KM * Math.cos(angleRad)) / ikpLat;
-    const startLng = RISO[1] + (INIT_ORBIT_KM * Math.sin(angleRad)) / ikpLng;
+    // Start around cloud centroid (= RISO at t=0)
+    const startLat = cloud.lat + (initSafeOrbitKm * Math.cos(angleRad)) / ikpLat;
+    const startLng = cloud.lng + (initSafeOrbitKm * Math.sin(angleRad)) / ikpLng;
     return {...b, lat:startLat, lng:startLng};
   });
 
@@ -796,11 +798,50 @@ function toggleAllForecasts(){
 // ══════════════════════════════════════════════════════════
 // BASE MOVEMENT
 // ══════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// BASE MOVEMENT — orbit the drifting cloud at safe distance
+// ══════════════════════════════════════════════════════════
+const BASE_SAFE_BUFFER_KM = 2.5;
+const BASE_SPEED = 0.00015;
+
 function moveBase(b){
+  const kpLat = 111;
+  const kpLng = 111 * Math.cos(cloud.lat * Math.PI / 180);
+
+  // Safe orbit radius: outside 3sigma of puff + buffer, never in hot zone
+  const safeOrbitKm = Math.max(cloud.sigmaY * 3, cloud.radiusKm * 2) + BASE_SAFE_BUFFER_KM;
+
+  // Each vehicle holds fixed angular offset relative to downwind direction
+  const angleOffsetDeg = BASE_ANGLE_OFFSETS[b.id] || 0;
+  const moveDeg = (cloud.windDeg + 180) % 360;
+  const targetAngleDeg = (moveDeg + angleOffsetDeg + 360) % 360;
+  const targetAngleRad = targetAngleDeg * Math.PI / 180;
+
+  // Ideal position orbiting current cloud centroid
+  const targetLat = cloud.lat + (safeOrbitKm * Math.cos(targetAngleRad)) / kpLat;
+  const targetLng = cloud.lng + (safeOrbitKm * Math.sin(targetAngleRad)) / kpLng;
+
+  // Move base smoothly toward target
+  const dLat = targetLat - b.lat;
+  const dLng = targetLng - b.lng;
+  const dist = Math.sqrt(dLat*dLat + dLng*dLng);
+  const step = BASE_SPEED * simSpeed;
+
+  if(dist > step){
+    b.lat += (dLat / dist) * step;
+    b.lng += (dLng / dist) * step;
+  } else {
+    b.lat = targetLat;
+    b.lng = targetLng;
+  }
+
   baseMarkers[b.id].setLatLng([b.lat, b.lng]);
+
+  // Update home position for parked drones
   drones.filter(d=>d.baseId===b.id&&(d.status==='idle'||d.status==='charging')).forEach(d=>{
-    d.homeLat=b.lat; d.homeLng=b.lng;
-    if(d.status==='idle'){ d.lat=b.lat; d.lng=b.lng; }
+    d.homeLat = b.lat;
+    d.homeLng = b.lng;
+    if(d.status==='idle'){ d.lat = b.lat; d.lng = b.lng; }
   });
 }
 
@@ -1196,7 +1237,7 @@ function resetSim(){
   addLog('SYSTEM RESET — KLAR','ok');
   addLog('RISØ — UDSLIP DETEKTERET','alert');
   addLog('MOBILNET OFFLINE — KUN RADIOLINK 15KM','warn');
-  addLog('50 DRONER PÅ 5 KØRETØJER — KLAR','ok');
+  addLog('50 DRONER PÅ 5 KØRETØJER — FØLGER SKYEN','ok');
   addLog('VIND: FRA SV → MOD NØ','warn');
 }
 function focusDrone(id){ const d=drones.find(x=>x.id===id); if(d) map.setView([d.lat,d.lng],14); }
