@@ -39,7 +39,6 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:0
 .panel-section{border-bottom:1px solid var(--border);padding:8px 12px;flex-shrink:0}
 .section-title{font-family:var(--font-mono);font-size:9px;color:var(--text-dim);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
 
-/* VEHICLE GROUP — expandable */
 .veh-group{margin-bottom:4px;border:1px solid var(--border);border-radius:3px;overflow:hidden}
 .veh-header{display:flex;align-items:center;gap:6px;padding:5px 8px;background:var(--surface2);cursor:pointer;transition:background .15s}
 .veh-header:hover{background:#222e42}
@@ -54,7 +53,6 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:0
 .veh-drones{display:none;padding:4px 6px;background:rgba(0,0,0,.15)}
 .veh-drones.open{display:block}
 
-/* Compact drone row — 5 per vehicle */
 .drone-mini{
   display:grid;grid-template-columns:34px 1fr 42px 46px;
   gap:3px;align-items:center;
@@ -81,7 +79,6 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:0
 .s-comms-out{background:rgba(255,51,102,.15);color:var(--danger)}
 .dm-meas{font-family:var(--font-mono);font-size:9px;text-align:right;white-space:nowrap;overflow:hidden}
 
-/* Comms range ring toggle */
 .comms-info-box{background:var(--surface2);border:1px solid var(--border);border-radius:2px;padding:6px 8px;margin-top:6px;font-family:var(--font-mono);font-size:9px;line-height:1.7;color:var(--text-dim)}
 .comms-info-box span{color:var(--accent)}
 
@@ -183,7 +180,6 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 </header>
 
 <div class="main">
-<!-- LEFT PANEL -->
 <div class="panel-left">
   <div class="panel-section">
     <div class="section-title">
@@ -251,7 +247,6 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 
 <div id="map"></div>
 
-<!-- RIGHT PANEL -->
 <div class="panel-right">
   <div class="sim-controls">
     <div class="section-title">▸ Simulation</div>
@@ -307,15 +302,9 @@ const TRUE_CLOUD = {
   sigmaY:2.2, sigmaZ:0.4, sourceHeight:50,
 };
 
-// Communication: dedicated radio link range from vehicle base
-const COMMS_RANGE_KM = 15;   // km from vehicle
-const COMMS_WEAK_KM  = 12;   // km — starts degrading
+const COMMS_RANGE_KM = 15;
+const COMMS_WEAK_KM  = 12;
 
-// Road-only waypoints — carefully verified to stay on land
-// All routes loop on real Danish road corridors around Risø
-// Vehicles orbit the cloud. Angle offsets relative to downwind direction:
-// B-01 = front (downwind), B-02 = front-left, B-03 = front-right,
-// B-04 = rear-left, B-05 = upwind (source monitor)
 const BASE_ANGLE_OFFSETS = {'B-01':0,'B-02':-60,'B-03':60,'B-04':150,'B-05':180};
 
 const BASE_DEFS = [
@@ -331,7 +320,6 @@ const BASE_DEFS = [
     drones:['D-41','D-42','D-43','D-44','D-45','D-46','D-47','D-48','D-49','D-50'] },
 ];
 
-// 25 drones — 5 per vehicle
 const ALT_SWEEPS = [
   {label:'L1',altM:100,color:'#00e5ff'},
   {label:'L2',altM:250,color:'#39ff8a'},
@@ -369,8 +357,9 @@ const ZONES=[
   {name:'Amager',        pos:[55.6608,12.5926],pop:90000},
 ];
 
-// Grid config
-const GRID_STEP_KM=1.1, CELL_FADE_SECS=3600, CELL_STALE_SECS=720, REDISPATCH_KM=2.5;
+// Grid anchored to FIXED ORIGIN (Risø) but cells are placed in world coordinates
+// Cells do NOT move — they record absolute lat/lng positions
+const GRID_STEP_KM=1.1, CELL_FADE_SECS=3600, CELL_STALE_SECS=720;
 
 // ══════════════════════════════════════════════════════════
 // STATE
@@ -383,65 +372,182 @@ let zoneRings=[], commsRings=[], showComms=false;
 const popMarkers=[];
 let logLines=[], evacuated=new Set();
 let stepCount=0, estimatedCloudRad=0;
+
+// Grid: keyed by absolute world cell index (not relative to cloud center)
+// This way cells stay in place as cloud moves — we don't try to relocate them
 const gridCells=new Map();
+
 let cloudHistory=[], historyPolyline=null;
 const forecastCircles={};
 let activeForecastHours=new Set();
-// Expanded vehicle groups
 const expandedVeh=new Set(['B-01','B-02','B-03','B-04','B-05']);
 
+// Fixed grid origin = Risø
+const GRID_ORIGIN_LAT = RISO[0];
+const GRID_ORIGIN_LNG = RISO[1];
+
 // ══════════════════════════════════════════════════════════
-// GAUSSIAN PLUME
+// GAUSSIAN PUFF MODEL — cloud drifts with wind from Risø
+// cloud.lat/lng = current puff centroid position
+// cloud.radiusKm / sigmaY / sigmaZ = spread parameters
 // ══════════════════════════════════════════════════════════
-function plumeValue(lat,lng,altM){
-  // Coordinate system:
-  // windDeg = FROM direction (meteorological). E.g. 225 = wind FROM SW, moves TO NE.
-  // moveDeg = direction cloud travels = (windDeg+180)%360
-  // xDw = distance downwind (positive = downwind = NE direction)
-  // yCw = distance crosswind
-  const moveDeg=((cloud.windDeg+180)%360);
-  const moveRad=moveDeg*Math.PI/180;
-  const kpLat=111, kpLng=111*Math.cos(cloud.lat*Math.PI/180);
-  const dx=(lng-cloud.lng)*kpLng; // km east
-  const dy=(lat-cloud.lat)*kpLat; // km north
+function plumeValue(lat, lng, altM){
+  const kpLat = 111;
+  const kpLng = 111 * Math.cos(cloud.lat * Math.PI / 180);
 
-  // Project onto downwind axis
-  // moveRad from north clockwise: downwind unit vector = (sin(moveRad), cos(moveRad)) in (east,north)
-  const xDw = dx*Math.sin(moveRad) + dy*Math.cos(moveRad); // positive = downwind
-  const yCw = dx*Math.cos(moveRad) - dy*Math.sin(moveRad); // crosswind
+  // Distance from current puff CENTROID (in km)
+  const dxKm = (lng - cloud.lng) * kpLng;
+  const dyKm = (lat - cloud.lat) * kpLat;
 
-  // No radiation upwind of source (xDw < -sourceRadius)
-  // Near-source puff exists within a small radius around the release point
-  const sourceR = cloud.radiusKm * 0.5;
-  if(xDw < -sourceR) return 0; // strictly upwind — no plume here
+  // Wind direction: project onto downwind / crosswind axes
+  const moveDeg = (cloud.windDeg + 180) % 360;
+  const moveRad = moveDeg * Math.PI / 180;
+  const dwEast  = Math.sin(moveRad);
+  const dwNorth = Math.cos(moveRad);
 
-  // Dispersion parameters grow with downwind distance
-  const downDist = Math.max(0.1, xDw); // km downwind from source
-  const sY = cloud.sigmaY * Math.pow(downDist/1.0, 0.9);  // crosswind spread
-  const sZ = Math.max(0.05, cloud.sigmaZ * Math.pow(downDist/1.0, 0.7)); // vertical spread
+  // xDw = along-wind distance from centroid (positive = downwind of centroid)
+  // yCw = cross-wind distance from centroid axis
+  const xDw = dxKm * dwEast  + dyKm * dwNorth;
+  const yCw = dxKm * dwNorth - dyKm * dwEast;
 
-  // Crosswind Gaussian
-  const gY = Math.exp(-0.5*(yCw/sY)**2);
+  // Puff has elongated downwind tail — asymmetric sigma
+  const sX = cloud.sigmaY * 1.4;   // along-wind (slightly elongated)
+  const sY = cloud.sigmaY;          // cross-wind
+  const sZ = Math.max(0.05, cloud.sigmaZ);
 
-  // Vertical Gaussian with ground reflection
-  const zKm  = altM/1000;
-  const hKm  = cloud.sourceHeight/1000;
-  const gZ   = Math.exp(-0.5*((zKm-hKm)/sZ)**2)
-              + Math.exp(-0.5*((zKm+hKm)/sZ)**2);
+  // 3D Gaussian puff (with ground reflection)
+  const gX = Math.exp(-0.5 * (xDw / sX) ** 2);
+  const gY = Math.exp(-0.5 * (yCw / sY) ** 2);
 
-  // Near-source puff: concentrated blob around release point (fades with time)
-  const nearDist = Math.sqrt(xDw**2 + yCw**2);
-  const puffStr  = Math.exp(-0.5*(nearDist/sourceR)**2);
+  const zKm = altM / 1000;
+  const hKm = cloud.sourceHeight / 1000;
+  const gZ  = Math.exp(-0.5 * ((zKm - hKm) / sZ) ** 2)
+             + Math.exp(-0.5 * ((zKm + hKm) / sZ) ** 2);  // ground reflection
 
-  // Far-field plume decays with downwind distance (dilution)
-  const dilution = 1.0 / Math.max(0.5, downDist * 0.8);
+  return Math.max(0, cloud.intensity * gX * gY * gZ);
+}
 
-  // Total: puff near source + elongating plume downwind
-  const val = cloud.intensity * (
-      0.35 * puffStr +                    // near-source puff
-      0.65 * gY * gZ * dilution          // downwind plume
-  );
-  return Math.max(0, val);
+// ══════════════════════════════════════════════════════════
+// GRID — Fixed world coordinates, anchored to Risø origin
+// ══════════════════════════════════════════════════════════
+function stepDegLat(){ return GRID_STEP_KM/111; }
+function stepDegLng(){ return GRID_STEP_KM/(111*Math.cos(GRID_ORIGIN_LAT*Math.PI/180)); }
+
+// Convert world index (gi, gj) → absolute lat/lng
+function gridIdxToLatLng(gi, gj){
+  return [
+    GRID_ORIGIN_LAT + gi * stepDegLat(),
+    GRID_ORIGIN_LNG + gj * stepDegLng()
+  ];
+}
+
+// Convert lat/lng → nearest world grid index
+function latLngToGridIdx(lat, lng){
+  return [
+    Math.round((lat - GRID_ORIGIN_LAT) / stepDegLat()),
+    Math.round((lng - GRID_ORIGIN_LNG) / stepDegLng())
+  ];
+}
+
+function cellKey(gi, gj){ return `${gi},${gj}`; }
+
+// ══════════════════════════════════════════════════════════
+// TARGET PICKING — Plume-aware, downwind-biased
+// ══════════════════════════════════════════════════════════
+function pickTarget(takenKeys, droneId){
+  const moveDeg = (cloud.windDeg + 180) % 360;
+  const moveRad = moveDeg * Math.PI / 180;
+  const kpLat = 111;
+  const kpLng = 111 * Math.cos(cloud.lat * Math.PI / 180);
+
+  const dwEast  = Math.sin(moveRad);
+  const dwNorth = Math.cos(moveRad);
+
+  // Search radius: 3.5 sigma around current cloud centroid covers 99%+ of puff
+  const sigma = Math.max(cloud.sigmaY, cloud.radiusKm);
+  const searchRadius = sigma * 3.5 + 3;
+
+  const [cGi, cGj] = latLngToGridIdx(cloud.lat, cloud.lng);
+  const maxCells = Math.ceil(searchRadius / GRID_STEP_KM) + 2;
+
+  const droneIdx = droneId ? (parseInt(droneId.replace('D-','')) - 1) : 0;
+  const totalDrones = 50;
+
+  const allCells = [];
+
+  for(let di = -maxCells; di <= maxCells; di++){
+    for(let dj = -maxCells; dj <= maxCells; dj++){
+      const gi = cGi + di;
+      const gj = cGj + dj;
+      const [cellLat, cellLng] = gridIdxToLatLng(gi, gj);
+
+      // Position relative to current cloud centroid
+      const dxKm = (cellLng - cloud.lng) * kpLng;
+      const dyKm = (cellLat - cloud.lat) * kpLat;
+      const dist = Math.sqrt(dxKm**2 + dyKm**2);
+
+      // Skip cells beyond search radius
+      if(dist > searchRadius) continue;
+
+      const key = cellKey(gi, gj);
+      const cell = gridCells.get(key);
+      const age = cell ? simTime - cell.time : Infinity;
+
+      // Model value at this cell
+      const modelVal = plumeValue(cellLat, cellLng, 200);
+
+      // Skip cells with no radiation that are already measured
+      if(modelVal < 0.05 && age < CELL_STALE_SECS) continue;
+
+      // Priority: unmeasured > stale > fresh
+      let priority = age === Infinity ? 1000 : age > CELL_STALE_SECS ? 400 : 50;
+
+      // Bonus for cells near edge of puff (boundary mapping is most critical)
+      const edgeDist = Math.abs(dist - sigma);
+      const edgeBonus = Math.max(0, 200 - edgeDist * 30);
+
+      // Bonus for high-radiation cells (cloud core)
+      const radBonus = modelVal > 100 ? 150 : modelVal > 10 ? 80 : modelVal > 1 ? 30 : 0;
+
+      // Spread bonus: distribute drones evenly around puff azimuth
+      const angle = Math.atan2(dyKm, dxKm) * 180 / Math.PI;
+      const droneAngle = (droneIdx * 360 / totalDrones) - 180;
+      const angleDiff = Math.abs(angle - droneAngle);
+      const normAngle = angleDiff > 180 ? 360 - angleDiff : angleDiff;
+      const spreadBonus = Math.max(0, 40 - normAngle * 0.4);
+
+      const totalScore = priority + edgeBonus + radBonus + spreadBonus;
+
+      allCells.push({ gi, gj, key, age, modelVal, totalScore });
+    }
+  }
+
+  if(allCells.length === 0) return null;
+
+  allCells.sort((a, b) => b.totalScore - a.totalScore);
+
+  // Distributed assignment: each drone index gets a different slice
+  const step = Math.max(1, Math.floor(allCells.length / totalDrones));
+  for(let i = droneIdx * step; i < allCells.length; i += totalDrones){
+    const idx = Math.min(i, allCells.length - 1);
+    if(!takenKeys.has(allCells[idx].key)){
+      const [lat, lng] = gridIdxToLatLng(allCells[idx].gi, allCells[idx].gj);
+      return { ...allCells[idx], lat, lng };
+    }
+  }
+  for(const c of allCells){
+    if(!takenKeys.has(c.key)){
+      const [lat, lng] = gridIdxToLatLng(c.gi, c.gj);
+      return { ...c, lat, lng };
+    }
+  }
+  return null;
+}
+
+function takenKeys(){
+  const s=new Set();
+  drones.forEach(d=>{ if(d.targetKey) s.add(d.targetKey); });
+  return s;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -457,10 +563,11 @@ L.marker(RISO,{icon:L.divIcon({
 })}).addTo(map).bindTooltip('Risø Atomenergianlæg',
   {permanent:true,direction:'right',className:'riso-tooltip',offset:[14,0]});
 
+let zoneRings2=[];
 function drawZoneRings(){
-  zoneRings.forEach(r=>map.removeLayer(r));zoneRings=[];
+  zoneRings2.forEach(r=>map.removeLayer(r)); zoneRings2=[];
   [[3000,'#ff3366'],[15000,'#ff7800'],[30000,'#ffcc00']].forEach(([r,c])=>{
-    zoneRings.push(L.circle(RISO,{radius:r,color:c,fillColor:c,fillOpacity:.01,
+    zoneRings2.push(L.circle(RISO,{radius:r,color:c,fillColor:c,fillOpacity:.01,
       weight:1,dashArray:'8,5',opacity:.35}).addTo(map));
   });
 }
@@ -478,21 +585,20 @@ ZONES.forEach(z=>{
 // INIT
 // ══════════════════════════════════════════════════════════
 function initAll(){
-  drones.forEach(d=>{if(droneMarkers[d.id]) map.removeLayer(droneMarkers[d.id]);});
-  bases.forEach(b=>{if(baseMarkers[b.id]) map.removeLayer(baseMarkers[b.id]);});
-  gridCells.forEach(c=>{if(c.marker) map.removeLayer(c.marker);});
+  drones.forEach(d=>{ if(droneMarkers[d.id]) map.removeLayer(droneMarkers[d.id]); });
+  bases.forEach(b=>{ if(baseMarkers[b.id]) map.removeLayer(baseMarkers[b.id]); });
+  gridCells.forEach(c=>{ if(c.marker) map.removeLayer(c.marker); });
   gridCells.clear();
-  if(historyPolyline){map.removeLayer(historyPolyline);historyPolyline=null;}
+  if(historyPolyline){ map.removeLayer(historyPolyline); historyPolyline=null; }
   cloudHistory=[];
   Object.values(forecastCircles).forEach(a=>a.forEach(c=>map.removeLayer(c)));
   Object.keys(forecastCircles).forEach(k=>delete forecastCircles[k]);
   activeForecastHours.clear();
   document.querySelectorAll('.fc-btn').forEach(b=>b.classList.remove('on'));
   document.getElementById('forecast-btn').classList.remove('active-toggle');
-  commsRings.forEach(r=>map.removeLayer(r));commsRings=[];
+  commsRings.forEach(r=>map.removeLayer(r)); commsRings=[];
   estimatedCloudRad=0;
 
-  // Place vehicles at their starting orbit positions around Risø
   const INIT_ORBIT_KM = 6;
   const initMoveDeg = (TRUE_CLOUD.windDeg + 180) % 360;
   const ikpLat = 111, ikpLng = 111 * Math.cos(RISO[0]*Math.PI/180);
@@ -508,13 +614,13 @@ function initAll(){
   drones=DRONE_DEFS.map(d=>{
     const base=bases.find(b=>b.drones.includes(d.id));
     return{
-      ...d,status:'idle',
-      lat:base.lat,lng:base.lng,
-      homeLat:base.lat,homeLng:base.lng,
+      ...d, status:'idle',
+      lat:base.lat, lng:base.lng,
+      homeLat:base.lat, homeLng:base.lng,
       baseId:base.id,
-      targetLat:null,targetLng:null,targetKey:null,
+      targetLat:null, targetLng:null, targetKey:null,
       missionAlt:d.sweep.altM,
-      lastMeas:null,commsOk:true,
+      lastMeas:null, commsOk:true,
     };
   });
 
@@ -549,7 +655,7 @@ function makeBaseIcon(b){
 // COMMS RANGE RINGS
 // ══════════════════════════════════════════════════════════
 function drawCommsRings(){
-  commsRings.forEach(r=>map.removeLayer(r));commsRings=[];
+  commsRings.forEach(r=>map.removeLayer(r)); commsRings=[];
   bases.forEach(b=>{
     const c1=L.circle([b.lat,b.lng],{
       radius:COMMS_RANGE_KM*1000,
@@ -569,133 +675,38 @@ function toggleCommsRings(){
   showComms=!showComms;
   document.getElementById('comms-btn').classList.toggle('active-toggle',showComms);
   if(showComms) drawCommsRings();
-  else{commsRings.forEach(r=>map.removeLayer(r));commsRings=[];}
-}
-
-// ══════════════════════════════════════════════════════════
-// GRID
-// ══════════════════════════════════════════════════════════
-function stepDegLat(){return GRID_STEP_KM/111;}
-function stepDegLng(){return GRID_STEP_KM/(111*Math.cos(cloud.lat*Math.PI/180));}
-function cellWorldPos(di,dj){return[cloud.lat+di*stepDegLat(),cloud.lng+dj*stepDegLng()];}
-function worldToCell(lat,lng){
-  return[Math.round((lat-cloud.lat)/stepDegLat()),Math.round((lng-cloud.lng)/stepDegLng())];
-}
-function cellKey(di,dj){return`${di},${dj}`;}
-
-function pickTarget(takenKeys, droneId){
-  // Build a flat list of ALL candidate cells in the search area,
-  // then distribute them round-robin by drone index.
-  // This guarantees every part of the area gets a drone assigned.
-
-  const moveDeg = (cloud.windDeg + 180) % 360;
-  const moveRad = moveDeg * Math.PI / 180;
-  const kpLat   = 111;
-  const kpLng   = 111 * Math.cos(cloud.lat * Math.PI / 180);
-
-  const baseR        = Math.max(estimatedCloudRad, TRUE_CLOUD.radiusKm, 3);
-  const searchDownKm = baseR * 3.0 + 6;   // far downwind
-  const searchUpKm   = 1.0;               // tiny upwind margin
-  const searchCrossKm= baseR * 1.8 + 3;
-
-  const maxDi = Math.ceil((searchDownKm + searchUpKm) / GRID_STEP_KM) + 1;
-  const maxDj = Math.ceil(searchCrossKm / GRID_STEP_KM) + 1;
-
-  // Drone index 0-49
-  const droneIdx = droneId ? (parseInt(droneId.replace('D-','')) - 1) : 0;
-  const totalDrones = 50;
-
-  // Collect all cells in the search area, sorted by priority
-  // (unmeasured/stale first, then by downwind distance descending)
-  const allCells = [];
-
-  for(let di = -maxDi; di <= maxDi; di++){
-    for(let dj = -maxDj; dj <= maxDj; dj++){
-      const cellLat = cloud.lat + di * stepDegLat();
-      const cellLng = cloud.lng + dj * stepDegLng();
-
-      const dxKm = (cellLng - cloud.lng) * kpLng;
-      const dyKm = (cellLat - cloud.lat) * kpLat;
-      const xDw  =  dxKm * Math.sin(moveRad) + dyKm * Math.cos(moveRad);
-      const yCw  =  dxKm * Math.cos(moveRad) - dyKm * Math.sin(moveRad);
-
-      if(xDw < -searchUpKm || xDw > searchDownKm) continue;
-      if(Math.abs(yCw) > searchCrossKm) continue;
-
-      const key  = cellKey(di, dj);
-      const cell = gridCells.get(key);
-      const age  = cell ? simTime - cell.time : Infinity;
-      if(age < CELL_STALE_SECS) continue; // fresh — skip
-
-      // Sort key: unmeasured first (age=Infinity → large number), then by downwind desc
-      // Multiply xDw to spread drones along the full plume length
-      const sortVal = (age === Infinity ? 1e9 : age) + xDw * 200;
-
-      allCells.push({di, dj, key, age, xDw, yCw, sortVal});
-    }
-  }
-
-  if(allCells.length === 0) return null;
-
-  // Sort: highest sortVal first (unmeasured far-downwind cells at top)
-  allCells.sort((a, b) => b.sortVal - a.sortVal);
-
-  // Round-robin: drone N gets cell at index N, N+totalDrones, N+2*totalDrones...
-  // Pick the first available (not in takenKeys)
-  for(let i = droneIdx; i < allCells.length; i += totalDrones){
-    if(!takenKeys.has(allCells[i].key)) return allCells[i];
-  }
-
-  // Fallback: any available cell
-  for(const c of allCells){
-    if(!takenKeys.has(c.key)) return c;
-  }
-
-  return null;
-}
-
-function takenKeys(){
-  const s=new Set();
-  drones.forEach(d=>{if(d.targetKey) s.add(d.targetKey);});
-  return s;
+  else{ commsRings.forEach(r=>map.removeLayer(r)); commsRings=[]; }
 }
 
 // ══════════════════════════════════════════════════════════
 // SIM STEP
 // ══════════════════════════════════════════════════════════
 function stepSim(){
-  simTime+=simSpeed;stepCount++;
+  simTime+=simSpeed; stepCount++;
   const hours=simTime/3600;
 
-  // Advance cloud
+  // Advance cloud CENTROID with wind (puff drifts from Risø)
+  cloud.radiusKm = TRUE_CLOUD.radiusKm + hours*0.5;
+  cloud.sigmaY   = TRUE_CLOUD.sigmaY   + hours*0.3;
+  cloud.sigmaZ   = TRUE_CLOUD.sigmaZ   + hours*0.05;
+  cloud.intensity= TRUE_CLOUD.intensity * Math.exp(-hours*0.085);
+  cloud.windDeg += (Math.random()-.5)*0.2;
   const moveDeg=(cloud.windDeg+180)%360;
   const dKm=cloud.windSpd*simSpeed/3600;
-  const kpLat=111,kpLng=111*Math.cos(cloud.lat*Math.PI/180);
-  cloud.lat+=dKm*Math.cos(moveDeg*Math.PI/180)/kpLat;
-  cloud.lng+=dKm*Math.sin(moveDeg*Math.PI/180)/kpLng;
-  cloud.radiusKm=TRUE_CLOUD.radiusKm+hours*0.5;
-  cloud.sigmaY=TRUE_CLOUD.sigmaY+hours*0.3;
-  cloud.sigmaZ=TRUE_CLOUD.sigmaZ+hours*0.05;
-  cloud.intensity=TRUE_CLOUD.intensity*Math.exp(-hours*0.085);
-  cloud.windDeg+=(Math.random()-.5)*0.2;
+  const kpLat=111, kpLng=111*Math.cos(RISO[0]*Math.PI/180);
+  cloud.lat += dKm*Math.cos(moveDeg*Math.PI/180)/kpLat;
+  cloud.lng += dKm*Math.sin(moveDeg*Math.PI/180)/kpLng;
+  // Reset estimated radius each step — cloud has moved so old max is invalid
+  estimatedCloudRad = 0;
 
-  // History trail
   if(stepCount%20===0){
     cloudHistory.push({lat:cloud.lat,lng:cloud.lng});
     if(cloudHistory.length>200) cloudHistory.shift();
     updateHistoryTrail();
   }
 
-  // No mid-mission redispatch — drones complete their assigned target
-  // New assignments happen naturally when they arrive and call assignNextTarget
-
-  // Move bases
   bases.forEach(b=>moveBase(b));
-
-  // Update comms rings position
   if(showComms&&stepCount%5===0) drawCommsRings();
-
-  // Step drones
   drones.forEach(d=>stepDrone(d));
 
   if(simTime%15===0) autoSchedule();
@@ -728,7 +739,7 @@ function updateHistoryTrail(){
 function forecastPos(h){
   const moveDeg=(cloud.windDeg+180)%360;
   const dKm=cloud.windSpd*h*3600/1000;
-  const kpLat=111,kpLng=111*Math.cos(cloud.lat*Math.PI/180);
+  const kpLat=111, kpLng=111*Math.cos(cloud.lat*Math.PI/180);
   return{
     lat:cloud.lat+dKm*Math.cos(moveDeg*Math.PI/180)/kpLat,
     lng:cloud.lng+dKm*Math.sin(moveDeg*Math.PI/180)/kpLng,
@@ -758,7 +769,7 @@ function toggleForecast(h){
   const btn=document.querySelector(`.fc-btn[data-h="${h}"]`);
   if(activeForecastHours.has(h)){
     activeForecastHours.delete(h);
-    if(forecastCircles[h]){forecastCircles[h].forEach(c=>map.removeLayer(c));delete forecastCircles[h];}
+    if(forecastCircles[h]){ forecastCircles[h].forEach(c=>map.removeLayer(c)); delete forecastCircles[h]; }
     btn&&btn.classList.remove('on');
   } else {
     activeForecastHours.add(h);
@@ -775,18 +786,17 @@ function toggleForecast(h){
 function toggleAllForecasts(){
   const any=activeForecastHours.size>0;
   [1,2,4,8].forEach(h=>{
-    if(any){activeForecastHours.delete(h);if(forecastCircles[h]){forecastCircles[h].forEach(c=>map.removeLayer(c));delete forecastCircles[h];}}
-    else{activeForecastHours.add(h);forecastCircles[h]=buildForecastCircles(h);}
+    if(any){ activeForecastHours.delete(h); if(forecastCircles[h]){ forecastCircles[h].forEach(c=>map.removeLayer(c)); delete forecastCircles[h]; } }
+    else{ activeForecastHours.add(h); forecastCircles[h]=buildForecastCircles(h); }
   });
   document.querySelectorAll('.fc-btn').forEach(b=>b.classList.toggle('on',!any));
   document.getElementById('forecast-btn').classList.toggle('active-toggle',!any);
 }
 
 // ══════════════════════════════════════════════════════════
-// BASE MOVEMENT — road-constrained, no water
+// BASE MOVEMENT
 // ══════════════════════════════════════════════════════════
 function moveBase(b){
-  // Vehicles are stationary — fixed positions around Risø
   baseMarkers[b.id].setLatLng([b.lat, b.lng]);
   drones.filter(d=>d.baseId===b.id&&(d.status==='idle'||d.status==='charging')).forEach(d=>{
     d.homeLat=b.lat; d.homeLng=b.lng;
@@ -795,19 +805,16 @@ function moveBase(b){
 }
 
 function stepDrone(d){
-  // Comms check: distance from home base
   const base=bases.find(x=>x.id===d.baseId);
   if(base){
     const distFromBase=latlngKm(d.lat,d.lng,base.lat,base.lng);
     const prevComms=d.commsOk;
-    d.commsOk= distFromBase<=COMMS_RANGE_KM;
-    d.commsWeak= distFromBase>COMMS_WEAK_KM && distFromBase<=COMMS_RANGE_KM;
-    // Lost comms — force return
+    d.commsOk = distFromBase<=COMMS_RANGE_KM;
+    d.commsWeak = distFromBase>COMMS_WEAK_KM && distFromBase<=COMMS_RANGE_KM;
     if(!d.commsOk && d.status==='mission'){
-      d.status='returning';d.targetLat=d.homeLat;d.targetLng=d.homeLng;
+      d.status='returning'; d.targetLat=d.homeLat; d.targetLng=d.homeLng;
       if(prevComms) addLog(`${d.id} → KOMMUNIKATION TABT — RETURNERER`,'alert');
     }
-    // Regained comms
     if(d.commsOk&&!prevComms&&d.status==='returning'){
       addLog(`${d.id} → KOMMUNIKATION GENOPRETTET`,'ok');
     }
@@ -815,14 +822,13 @@ function stepDrone(d){
 
   if(d.status==='charging'){
     d.battery=Math.min(100,d.battery+(100/1300)*simSpeed);
-    if(base){d.lat=base.lat;d.lng=base.lng;d.homeLat=base.lat;d.homeLng=base.lng;}
-    if(d.battery>=96){d.status='idle';addLog(`${d.id} → KLAR`,'ok');}
+    if(base){ d.lat=base.lat; d.lng=base.lng; d.homeLat=base.lat; d.homeLng=base.lng; }
+    if(d.battery>=96){ d.status='idle'; addLog(`${d.id} → KLAR`,'ok'); }
   } else if(d.status==='idle'){
-    if(base){d.lat=base.lat;d.lng=base.lng;}
+    if(base){ d.lat=base.lat; d.lng=base.lng; }
   } else if(d.status==='mission'){
-    // Wind-adjusted battery
     const windToRad=((cloud.windDeg+180)%360)*Math.PI/180;
-    const flyDlat=d.targetLat-d.lat,flyDlng=d.targetLng-d.lng;
+    const flyDlat=d.targetLat-d.lat, flyDlng=d.targetLng-d.lng;
     const flyDist=Math.sqrt(flyDlat**2+flyDlng**2);
     let hwf=1.0;
     if(flyDist>0.0001){
@@ -834,15 +840,15 @@ function stepDrone(d){
     moveToward(d,d.targetLat,d.targetLng,0.0020);
     if(stepCount%4===0) sampleAt(d);
     if(dist2D(d.lat,d.lng,d.targetLat,d.targetLng)<0.0006){
-      sampleAt(d);d.targetKey=null;
-      if(d.battery<10){d.status='returning';d.targetLat=d.homeLat;d.targetLng=d.homeLng;addLog(`${d.id} → HJEM`,'warn');}
+      sampleAt(d); d.targetKey=null;
+      if(d.battery<10){ d.status='returning'; d.targetLat=d.homeLat; d.targetLng=d.homeLng; addLog(`${d.id} → HJEM`,'warn'); }
       else assignNextTarget(d);
     }
   } else if(d.status==='returning'){
     moveToward(d,d.homeLat,d.homeLng,0.0030);
     d.battery=Math.max(0,d.battery-0.010*simSpeed);
     if(dist2D(d.lat,d.lng,d.homeLat,d.homeLng)<0.0007){
-      d.lat=d.homeLat;d.lng=d.homeLng;d.status='charging';
+      d.lat=d.homeLat; d.lng=d.homeLng; d.status='charging';
       addLog(`${d.id} → OPLADER`,'ok');
     }
   }
@@ -855,32 +861,40 @@ function stepDrone(d){
 }
 
 function moveToward(d,tlat,tlng,spd){
-  const dlat=tlat-d.lat,dlng=tlng-d.lng;
+  const dlat=tlat-d.lat, dlng=tlng-d.lng;
   const dist=Math.sqrt(dlat*dlat+dlng*dlng);
-  if(dist<spd*simSpeed){d.lat=tlat;d.lng=tlng;return;}
-  const f=spd*simSpeed/dist;d.lat+=dlat*f;d.lng+=dlng*f;
+  if(dist<spd*simSpeed){ d.lat=tlat; d.lng=tlng; return; }
+  const f=spd*simSpeed/dist; d.lat+=dlat*f; d.lng+=dlng*f;
 }
 
 // ══════════════════════════════════════════════════════════
 // MEASUREMENT
 // ══════════════════════════════════════════════════════════
 function sampleAt(d){
-  if(!d.commsOk) return; // can't transmit data
+  if(!d.commsOk) return;
   const val=Math.max(0.04,plumeValue(d.lat,d.lng,d.missionAlt)*(1+(Math.random()-.5)*0.08));
   d.lastMeas=val;
-  const[di,dj]=worldToCell(d.lat,d.lng);
-  const key=cellKey(di,dj);
-  const[clat,clng]=cellWorldPos(di,dj);
+
+  const [gi, gj] = latLngToGridIdx(d.lat, d.lng);
+  const key=cellKey(gi, gj);
+  const [clat, clng] = gridIdxToLatLng(gi, gj);
+
   const ex=gridCells.get(key);
-  if(ex){ex.value=val;ex.time=simTime;ex.altM=d.missionAlt;ex.lat=clat;ex.lng=clng;}
+  if(ex){ ex.value=val; ex.time=simTime; ex.altM=d.missionAlt; }
   else{
     const m=L.circleMarker([clat,clng],{radius:5,fillColor:measColor(val,.78),fillOpacity:.78,
       color:measColor(val,.35),opacity:.35,weight:0}).addTo(map);
     m.bindTooltip('',{direction:'top'});
-    gridCells.set(key,{di,dj,lat:clat,lng:clng,value:val,time:simTime,altM:d.missionAlt,marker:m});
+    gridCells.set(key,{gi,gj,lat:clat,lng:clng,value:val,time:simTime,altM:d.missionAlt,marker:m});
   }
-  if(val>10){const r=latlngKm(d.lat,d.lng,cloud.lat,cloud.lng);if(r>estimatedCloudRad)estimatedCloudRad=r;}
+
+  // Update estimated cloud radius (distance from current cloud centroid)
+  if(val>10){
+    const r=latlngKm(d.lat,d.lng,cloud.lat,cloud.lng);
+    if(r>estimatedCloudRad) estimatedCloudRad=r;
+  }
 }
+
 function measColor(val,op){
   const[r,g,b]=val>1000?[255,20,80]:val>100?[255,100,0]:val>10?[255,210,0]:[40,255,130];
   return`rgba(${r},${g},${b},${op})`;
@@ -891,27 +905,32 @@ function renderGrid(){
   gridCells.forEach((cell,key)=>{
     const age=simTime-cell.time;
     const op=Math.max(0,1-age/CELL_FADE_SECS);
-    if(op<=0.02){del.push(key);return;}
-    const[clat,clng]=cellWorldPos(cell.di,cell.dj);
-    cell.lat=clat;cell.lng=clng;cell.marker.setLatLng([clat,clng]);
+    if(op<=0.02){ del.push(key); return; }
+    // Cells are anchored in world space — no position update needed
     cell.marker.setStyle({fillColor:measColor(cell.value,op*.78),fillOpacity:op*.78,
       color:measColor(cell.value,op*.35),opacity:op*.35});
     cell.marker.setTooltipContent(`${cell.value.toFixed(1)} μSv/h @ ${Math.round(cell.altM)}m · ${Math.round(age/60)}min`);
   });
-  del.forEach(k=>{map.removeLayer(gridCells.get(k).marker);gridCells.delete(k);});
+  del.forEach(k=>{ map.removeLayer(gridCells.get(k).marker); gridCells.delete(k); });
 }
 
 function computeCoverage(){
-  const sr=Math.max(estimatedCloudRad*1.3,TRUE_CLOUD.radiusKm)+1;
-  const mc=Math.ceil(sr/GRID_STEP_KM);
-  let total=0,fresh=0;
-  for(let di=-mc;di<=mc;di++)for(let dj=-mc;dj<=mc;dj++){
-    if(Math.sqrt((di*GRID_STEP_KM)**2+(dj*GRID_STEP_KM)**2)>sr) continue;
-    total++;
-    const c=gridCells.get(cellKey(di,dj));
-    if(c&&simTime-c.time<CELL_STALE_SECS) fresh++;
+  // Coverage = fraction of puff area with fresh measurements
+  const searchR = Math.max(cloud.sigmaY, cloud.radiusKm) * 3.5;
+  const maxC = Math.ceil(searchR / GRID_STEP_KM) + 1;
+  const [cGi, cGj] = latLngToGridIdx(cloud.lat, cloud.lng);
+  let total=0, fresh=0;
+  for(let di=-maxC; di<=maxC; di++){
+    for(let dj=-maxC; dj<=maxC; dj++){
+      const [cellLat, cellLng] = gridIdxToLatLng(cGi+di, cGj+dj);
+      const modelVal = plumeValue(cellLat, cellLng, 200);
+      if(modelVal < 0.1) continue;
+      total++;
+      const c = gridCells.get(cellKey(cGi+di, cGj+dj));
+      if(c && simTime - c.time < CELL_STALE_SECS) fresh++;
+    }
   }
-  return total>0?fresh/total:0;
+  return total > 0 ? fresh/total : 0;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -919,9 +938,8 @@ function computeCoverage(){
 // ══════════════════════════════════════════════════════════
 function assignNextTarget(d){
   const t=pickTarget(takenKeys(), d.id);
-  if(!t){d.status='returning';d.targetLat=d.homeLat;d.targetLng=d.homeLng;return;}
-  const[lat,lng]=cellWorldPos(t.di,t.dj);
-  d.targetLat=lat;d.targetLng=lng;d.targetKey=t.key;
+  if(!t){ d.status='returning'; d.targetLat=d.homeLat; d.targetLng=d.homeLng; return; }
+  d.targetLat=t.lat; d.targetLng=t.lng; d.targetKey=t.key;
   d.missionAlt=d.sweep.altM+(Math.random()-.5)*40;
 }
 
@@ -931,7 +949,6 @@ function autoSchedule(){
   const idle=drones.filter(d=>d.status==='idle'&&d.battery>22);
   let launched=0;
   for(let i=0;i<idle.length && (active+launched)<40;i++){
-    // takenKeys() re-evaluated each iteration so each drone gets a unique cell
     if(launchDrone(idle[i])) launched++;
   }
 }
@@ -939,8 +956,7 @@ function autoSchedule(){
 function launchDrone(d){
   const t=pickTarget(takenKeys(), d.id);
   if(!t) return false;
-  const[lat,lng]=cellWorldPos(t.di,t.dj);
-  d.targetLat=lat;d.targetLng=lng;d.targetKey=t.key;
+  d.targetLat=t.lat; d.targetLng=t.lng; d.targetKey=t.key;
   d.missionAlt=d.sweep.altM+(Math.random()-.5)*40;
   d.status='mission';
   addLog(`${d.id}[${d.sweep.label}] → ${t.age===Infinity?'NY':'GENBESØG'}`,'ok');
@@ -948,12 +964,12 @@ function launchDrone(d){
 }
 
 function deployAll(){
-  drones.forEach(d=>{if(d.status==='idle'&&d.battery>22) launchDrone(d);});
+  drones.forEach(d=>{ if(d.status==='idle'&&d.battery>22) launchDrone(d); });
   updateVehicleDroneList();
 }
 
 // ══════════════════════════════════════════════════════════
-// UI — grouped vehicle/drone list
+// UI
 // ══════════════════════════════════════════════════════════
 function toggleVehExpand(id){
   expandedVeh.has(id)?expandedVeh.delete(id):expandedVeh.add(id);
@@ -961,7 +977,6 @@ function toggleVehExpand(id){
 }
 
 function updateVehicleDroneList(){
-  const total=drones.length;
   const inMission=drones.filter(d=>d.status==='mission').length;
   const commsOkCount=drones.filter(d=>d.commsOk!==false).length;
   document.getElementById('drone-summary').textContent=`${inMission} aktive`;
@@ -1011,7 +1026,7 @@ function updateVehicleDroneList(){
 
 function updateReadings(){
   const fresh=[];
-  gridCells.forEach(c=>{if(simTime-c.time<CELL_STALE_SECS) fresh.push(c.value);});
+  gridCells.forEach(c=>{ if(simTime-c.time<CELL_STALE_SECS) fresh.push(c.value); });
   const maxV=fresh.length?Math.max(...fresh):null;
   const avgV=fresh.length?fresh.reduce((a,b)=>a+b,0)/fresh.length:null;
   const cov=computeCoverage();
@@ -1040,23 +1055,26 @@ function updateWindDisplay(){
 function updateEvac(){
   const rows=popMarkers.map(p=>{
     const near=[];
-    gridCells.forEach(c=>{if(simTime-c.time<CELL_STALE_SECS&&latlngKm(c.lat,c.lng,p.pos[0],p.pos[1])<6) near.push(c.value);});
+    gridCells.forEach(c=>{ if(simTime-c.time<CELL_STALE_SECS&&latlngKm(c.lat,c.lng,p.pos[0],p.pos[1])<6) near.push(c.value); });
     const estVal=near.length?near.reduce((a,b)=>a+b,0)/near.length:null;
     const modelVal=plumeValue(p.pos[0],p.pos[1],10);
     const val=estVal!=null?estVal:(gridCells.size>15?modelVal:0);
     let status,cls;
     if(val>100){
-      status='EVAKUER';cls='evac-evacuate';
+      status='EVAKUER'; cls='evac-evacuate';
       if(!evacuated.has(p.name)){
         evacuated.add(p.name);
         showNotif('⚠ EVAKUERING',`${p.name} — ${p.pop.toLocaleString()} indb.`,true);
         addLog(`${p.name.toUpperCase()} → EVAKUERING`,'alert');
         document.getElementById('alert-badge').classList.remove('hidden');
       }
-    } else if(val>20){status='BEREDSKAB';cls='evac-watch';}
-    else{status='CLEAR';cls='evac-clear';evacuated.delete(p.name);}
+    } else if(val>20){ status='BEREDSKAB'; cls='evac-watch'; }
+    else{ status='CLEAR'; cls='evac-clear'; evacuated.delete(p.name); }
     if(evacuated.size===0) document.getElementById('alert-badge').classList.add('hidden');
-    p.marker.setStyle({fillColor:cls.includes('evacuate')?'#ff3366':cls.includes('watch')?'#ffcc00':'#39ff8a',color:cls.includes('evacuate')?'#ff3366':cls.includes('watch')?'#ffcc00':'#39ff8a'});
+    p.marker.setStyle({
+      fillColor:cls.includes('evacuate')?'#ff3366':cls.includes('watch')?'#ffcc00':'#39ff8a',
+      color:cls.includes('evacuate')?'#ff3366':cls.includes('watch')?'#ffcc00':'#39ff8a'
+    });
     return`<div class="evac-zone">
       <span class="evac-icon">🏘</span>
       <div class="evac-info">
@@ -1071,34 +1089,34 @@ function updateEvac(){
 
 function updateTimeBar(){
   document.getElementById('time-bar').style.width=Math.min(100,simTime/(3600*8)*100)+'%';
-  const h=Math.floor(simTime/3600),m=Math.floor((simTime%3600)/60);
+  const h=Math.floor(simTime/3600), m=Math.floor((simTime%3600)/60);
   document.getElementById('time-val').textContent=`T+${h}h${String(m).padStart(2,'0')}m`;
 }
-function updateClock(){document.getElementById('clock').textContent=new Date().toTimeString().slice(0,8);}
+function updateClock(){ document.getElementById('clock').textContent=new Date().toTimeString().slice(0,8); }
 
 function drawProfile(){
   const cv=document.getElementById('profile-canvas');
-  cv.width=cv.offsetWidth||222;cv.height=cv.offsetHeight||72;
-  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height;
+  cv.width=cv.offsetWidth||222; cv.height=cv.offsetHeight||72;
+  const ctx=cv.getContext('2d'), W=cv.width, H=cv.height;
   ctx.clearRect(0,0,W,H);
   const fresh=[];
-  gridCells.forEach(c=>{if(simTime-c.time<CELL_STALE_SECS) fresh.push(c);});
+  gridCells.forEach(c=>{ if(simTime-c.time<CELL_STALE_SECS) fresh.push(c); });
   if(fresh.length>0){
-    const BINS=24,maxAlt=1000;
-    const bins=new Array(BINS).fill(0),counts=new Array(BINS).fill(0);
-    fresh.forEach(c=>{const bi=Math.min(BINS-1,Math.floor(c.altM/maxAlt*BINS));bins[bi]+=c.value;counts[bi]++;});
+    const BINS=24, maxAlt=1000;
+    const bins=new Array(BINS).fill(0), counts=new Array(BINS).fill(0);
+    fresh.forEach(c=>{ const bi=Math.min(BINS-1,Math.floor(c.altM/maxAlt*BINS)); bins[bi]+=c.value; counts[bi]++; });
     const avgs=bins.map((v,i)=>counts[i]?v/counts[i]:0);
     const maxA=Math.max(...avgs,1);
     const grad=ctx.createLinearGradient(0,0,0,H);
-    grad.addColorStop(0,'rgba(255,51,102,.8)');grad.addColorStop(.5,'rgba(255,120,0,.7)');grad.addColorStop(1,'rgba(0,255,136,.3)');
-    ctx.beginPath();ctx.moveTo(0,H);
+    grad.addColorStop(0,'rgba(255,51,102,.8)'); grad.addColorStop(.5,'rgba(255,120,0,.7)'); grad.addColorStop(1,'rgba(0,255,136,.3)');
+    ctx.beginPath(); ctx.moveTo(0,H);
     avgs.forEach((a,i)=>ctx.lineTo((i/BINS)*W+(W/BINS)*.5,H-(a/maxA)*(H*.82)));
-    ctx.lineTo(W,H);ctx.closePath();ctx.fillStyle=grad;ctx.fill();
+    ctx.lineTo(W,H); ctx.closePath(); ctx.fillStyle=grad; ctx.fill();
   } else {
-    ctx.fillStyle='rgba(90,122,154,.1)';ctx.fillRect(0,0,W,H);
-    ctx.fillStyle='rgba(90,122,154,.5)';ctx.font="9px 'Share Tech Mono'";ctx.textAlign='center';ctx.fillText('Afventer data...',W/2,H/2+3);
+    ctx.fillStyle='rgba(90,122,154,.1)'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='rgba(90,122,154,.5)'; ctx.font="9px 'Share Tech Mono'"; ctx.textAlign='center'; ctx.fillText('Afventer data...',W/2,H/2+3);
   }
-  ctx.strokeStyle='rgba(0,229,255,0.45)';ctx.lineWidth=1.5;ctx.beginPath();
+  ctx.strokeStyle='rgba(0,229,255,0.45)'; ctx.lineWidth=1.5; ctx.beginPath();
   for(let altM=0;altM<=1000;altM+=20){
     const v=plumeValue(cloud.lat,cloud.lng,altM);
     const norm=Math.min(1,v/Math.max(1,cloud.intensity));
@@ -1107,12 +1125,12 @@ function drawProfile(){
     altM===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
   }
   ctx.stroke();
-  ctx.fillStyle=darkMode?'#3a5a7a':'#8090a0';ctx.font="8px 'Share Tech Mono'";
-  ctx.textAlign='left';ctx.fillText('0m',2,H-2);ctx.textAlign='right';ctx.fillText('1km',W-2,H-2);
+  ctx.fillStyle=darkMode?'#3a5a7a':'#8090a0'; ctx.font="8px 'Share Tech Mono'";
+  ctx.textAlign='left'; ctx.fillText('0m',2,H-2); ctx.textAlign='right'; ctx.fillText('1km',W-2,H-2);
   drones.filter(d=>d.status==='mission').forEach(d=>{
     const y=H-(d.missionAlt/1000)*H;
-    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W*.55,y);
-    ctx.strokeStyle=d.sweep.color;ctx.lineWidth=0.8;ctx.setLineDash([2,3]);ctx.stroke();ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W*.55,y);
+    ctx.strokeStyle=d.sweep.color; ctx.lineWidth=0.8; ctx.setLineDash([2,3]); ctx.stroke(); ctx.setLineDash([]);
   });
   const sweeps=[...new Set(drones.filter(d=>d.status==='mission').map(d=>d.sweep.label))];
   document.getElementById('sweep-info').textContent=sweeps.join(' ')||'ingen';
@@ -1121,9 +1139,9 @@ function drawProfile(){
 // ══════════════════════════════════════════════════════════
 // UTILS
 // ══════════════════════════════════════════════════════════
-function latlngKm(a,b,c,d){const R=6371,dl=(c-a)*Math.PI/180,dn=(d-b)*Math.PI/180;const x=Math.sin(dl/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dn/2)**2;return R*2*Math.asin(Math.sqrt(x));}
-function dist2D(a,b,c,d){return Math.sqrt((a-c)**2+(b-d)**2);}
-function deg2compass(deg){const d=['N','NNØ','NØ','ØNØ','Ø','ØSØ','SØ','SSØ','S','SSV','SV','VSV','V','VNV','NV','NNV'];return d[Math.round(((deg%360)+360)%360/22.5)%16];}
+function latlngKm(a,b,c,d){ const R=6371,dl=(c-a)*Math.PI/180,dn=(d-b)*Math.PI/180; const x=Math.sin(dl/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dn/2)**2; return R*2*Math.asin(Math.sqrt(x)); }
+function dist2D(a,b,c,d){ return Math.sqrt((a-c)**2+(b-d)**2); }
+function deg2compass(deg){ const d=['N','NNØ','NØ','ØNØ','Ø','ØSØ','SØ','SSØ','S','SSV','SV','VSV','V','VNV','NV','NNV']; return d[Math.round(((deg%360)+360)%360/22.5)%16]; }
 function addLog(msg,type=''){
   logLines.unshift({time:new Date().toTimeString().slice(0,8),msg,type});
   if(logLines.length>80) logLines.pop();
@@ -1134,7 +1152,7 @@ function showNotif(title,body,danger=false){
   document.getElementById('notif-body').textContent=body;
   const el=document.getElementById('notif');
   el.style.borderColor=danger?'var(--danger)':'var(--accent)';
-  el.classList.add('show');setTimeout(()=>el.classList.remove('show'),6000);
+  el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),6000);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1144,36 +1162,36 @@ function toggleSim(){
   simRunning=!simRunning;
   const btn=document.getElementById('sim-btn');
   if(simRunning){
-    btn.textContent='⏸ PAUSE';btn.classList.add('danger');
-    simInterval=setInterval(()=>{for(let i=0;i<Math.ceil(simSpeed);i++) stepSim();},80);
+    btn.textContent='⏸ PAUSE'; btn.classList.add('danger');
+    simInterval=setInterval(()=>{ for(let i=0;i<Math.ceil(simSpeed);i++) stepSim(); },80);
     addLog('SIMULATION STARTET','ok');
     showNotif('Beredskab aktiveret','50 droner på 5 køretøjer · Mobilnet OFFLINE · Radiolink 15km');
   } else {
-    btn.textContent='▶ START';btn.classList.remove('danger');
-    clearInterval(simInterval);addLog('SIMULATION PAUSERET');
+    btn.textContent='▶ START'; btn.classList.remove('danger');
+    clearInterval(simInterval); addLog('SIMULATION PAUSERET');
   }
 }
-function updateSpeed(v){simSpeed=parseInt(v);document.getElementById('speed-val').textContent=v+'×';}
+function updateSpeed(v){ simSpeed=parseInt(v); document.getElementById('speed-val').textContent=v+'×'; }
 function resetSim(){
   if(simRunning) toggleSim();
-  simTime=0;stepCount=0;
+  simTime=0; stepCount=0;
   Object.assign(cloud,TRUE_CLOUD);
-  gridCells.forEach(c=>map.removeLayer(c.marker));gridCells.clear();
-  if(historyPolyline){map.removeLayer(historyPolyline);historyPolyline=null;}
+  gridCells.forEach(c=>map.removeLayer(c.marker)); gridCells.clear();
+  if(historyPolyline){ map.removeLayer(historyPolyline); historyPolyline=null; }
   cloudHistory=[];
   Object.values(forecastCircles).forEach(a=>a.forEach(c=>map.removeLayer(c)));
   Object.keys(forecastCircles).forEach(k=>delete forecastCircles[k]);
   activeForecastHours.clear();
-  commsRings.forEach(r=>map.removeLayer(r));commsRings=[];
+  commsRings.forEach(r=>map.removeLayer(r)); commsRings=[];
   showComms=false;
   document.getElementById('comms-btn').classList.remove('active-toggle');
   document.getElementById('forecast-btn').classList.remove('active-toggle');
   document.querySelectorAll('.fc-btn').forEach(b=>b.classList.remove('on'));
-  evacuated.clear();logLines=[];estimatedCloudRad=0;
+  evacuated.clear(); logLines=[]; estimatedCloudRad=0;
   document.getElementById('alert-badge').classList.add('hidden');
   document.getElementById('forecast-info').textContent='Vælg tidshorisont ovenfor';
   initAll();
-  updateVehicleDroneList();updateReadings();updateWindDisplay();updateEvac();updateTimeBar();
+  updateVehicleDroneList(); updateReadings(); updateWindDisplay(); updateEvac(); updateTimeBar();
   document.getElementById('log').innerHTML='';
   addLog('SYSTEM RESET — KLAR','ok');
   addLog('RISØ — UDSLIP DETEKTERET','alert');
@@ -1181,23 +1199,23 @@ function resetSim(){
   addLog('50 DRONER PÅ 5 KØRETØJER — KLAR','ok');
   addLog('VIND: FRA SV → MOD NØ','warn');
 }
-function focusDrone(id){const d=drones.find(x=>x.id===id);if(d) map.setView([d.lat,d.lng],14);}
-function toggleTheme(){darkMode=!darkMode;document.body.classList.toggle('light',!darkMode);document.getElementById('theme-btn').textContent=darkMode?'☀ LIGHT':'🌙 DARK';}
+function focusDrone(id){ const d=drones.find(x=>x.id===id); if(d) map.setView([d.lat,d.lng],14); }
+function toggleTheme(){ darkMode=!darkMode; document.body.classList.toggle('light',!darkMode); document.getElementById('theme-btn').textContent=darkMode?'☀ LIGHT':'🌙 DARK'; }
 
 // ══════════════════════════════════════════════════════════
 // BOOT
 // ══════════════════════════════════════════════════════════
 initAll();
-updateVehicleDroneList();updateWindDisplay();updateEvac();
-updateClock();drawProfile();
+updateVehicleDroneList(); updateWindDisplay(); updateEvac();
+updateClock(); drawProfile();
 setInterval(updateClock,1000);
-setTimeout(()=>{updateEvac();drawProfile();updateWindDisplay();},300);
+setTimeout(()=>{ updateEvac(); drawProfile(); updateWindDisplay(); },300);
 window.addEventListener('resize',()=>drawProfile());
 
-addLog('NUCLEARWATCH v8.0 INITIALISERET','ok');
+addLog('NUCLEARWATCH v8.1 INITIALISERET','ok');
 addLog('RISØ ATOMENERGIANLÆG — INCIDENT LEVEL 4','alert');
 addLog('50 DRONER · 5 KØRETØJER PÅ LANDJORD','ok');
-addLog('RADIOLINK 15KM · MOBILNET OFFLINE','warn');
+addLog('RADIOAKTIV SKY-TRACKING — DRONER FØLGER SKYEN','ok');
 addLog('TRYK 📡 KOMMS FOR AT SE RÆKKEVIDDE','ok');
 addLog('RADIOAKTIV SKY UKENDT — TRYK START','warn');
 </script>
